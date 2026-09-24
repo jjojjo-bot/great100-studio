@@ -1,0 +1,22 @@
+[package]
+name = "great100-studio"
+version = "0.1.0"
+description = "A focused image production studio for the Great100 series"
+authors = ["Great100 Studio"]
+edition = "2021"
+
+[lib]
+name = "great100_studio_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+reqwest = { version = "0.12", features = ["json", "multipart", "rustls-tls"], default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+uuid = { version = "1", features = ["v4"] }

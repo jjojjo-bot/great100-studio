@@ -1,0 +1,48 @@
+# Great100 Studio
+
+‘한국을 빛낸 100인’ 이미지 제작을 위한 React + TypeScript 스튜디오입니다. 웹앱으로 사용할 수 있고, Tauri 데스크톱 앱도 포함합니다.
+
+## 로컬 웹 실행
+
+```bash
+npm install
+npm run dev
+```
+
+웹앱에서 접근 코드를 비워두면 mock 이미지로 전체 흐름을 사용할 수 있습니다. 프로젝트와 후보 이미지는 이 브라우저의 IndexedDB에 저장됩니다. 같은 브라우저에서 다시 열 수 있으며, 완료 화면이나 대시보드에서 ZIP을 내려받으면 `projects/<회차_인물>/` 구조의 파일로 보관할 수 있습니다. 브라우저 데이터를 지우거나 다른 기기로 옮기면 저장 내용이 자동으로 따라가지 않으므로 ZIP을 보관하세요.
+
+API 결제 없이 ChatGPT Plus에서 만든 이미지를 사용하려면 각 기준 이미지·Scene·썸네일 단계에서 **이미지 업로드**를 누르세요. PNG/JPEG/WebP 파일을 한 번에 최대 6장, 각 12MB까지 추가할 수 있습니다. 마지막으로 업로드한 이미지가 자동 선택되며 다른 후보를 클릭해 바꿀 수 있습니다. 업로드 이미지도 브라우저에 저장되고 ZIP의 해당 폴더에 포함됩니다. 브라우저 저장 용량에는 한계가 있으므로 작업을 마치면 ZIP을 내려받으세요.
+
+## Vercel 배포
+
+저장소 루트에서 `vercel`을 실행하면 Vite 웹앱과 `api/generate.ts` 함수가 함께 배포됩니다. 실제 OpenAI 이미지 생성을 사용할 때만 Vercel 환경 변수 두 개를 설정합니다.
+
+- `OPENAI_API_KEY`: 서버에서만 읽는 OpenAI API 키
+- `GREAT100_ACCESS_KEY`: 개인 사용을 위한 별도 접근 코드. 웹앱의 입력칸에 이 코드를 입력합니다.
+
+두 값 중 하나라도 없으면 서버의 실제 이미지 생성은 비활성화됩니다. 접근 코드는 OpenAI API 키가 아닙니다. 이 개인 사용 방식은 계정별 분리나 공유 프로젝트를 제공하지 않습니다. 다른 사용자에게 공개하기 전에는 사용자 인증, 사용량 제한, 중앙 저장소가 필요합니다.
+
+웹에서 실제 생성 요청을 로컬로 시험하려면 `vercel dev`를 사용합니다. 일반 `npm run dev`는 프런트엔드와 mock mode를 실행합니다.
+
+## 데스크톱 실행
+
+Rust와 macOS 개발 도구가 설치된 환경에서는 다음을 실행합니다.
+
+```bash
+npm run tauri dev
+```
+
+macOS에서 Xcode 전체 설치의 라이선스가 미동의 상태여도 Command Line Tools가 설치되어 있다면 `DEVELOPER_DIR=/Library/Developer/CommandLineTools`를 명령 앞에 지정할 수 있습니다. 데스크톱 앱은 프로젝트 루트 아래 실제 `projects/` 폴더를 생성합니다. `OPENAI_API_KEY`가 없으면 mock 이미지가 저장됩니다.
+
+## 프로젝트 구성
+
+`projects/<회차_인물>/`에는 `project_data.json`과 다음 하위 폴더가 들어갑니다.
+
+- `01_source`
+- `02_character`
+- `03_images/sceneXX`
+- `04_thumbnail`
+- `05_exports`
+- `06_logs`
+
+웹 ZIP에는 원문, 프로젝트 데이터, 생성 이미지, 최종 선택 이미지, 프롬프트 이력이 들어갑니다.

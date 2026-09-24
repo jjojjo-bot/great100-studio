@@ -1,0 +1,169 @@
+import { invoke } from "@tauri-apps/api/core";
+import { openDB } from "idb";
+import JSZip from "jszip";
+import type { GenerateRequest, ImageCandidate, ProjectData, VisualAsset } from "./types";
+
+export const isTauri = () => "__TAURI_INTERNALS__" in window;
+
+const database = () => openDB("great100-studio", 1, {
+  upgrade(db) {
+    db.createObjectStore("projects", { keyPath: "id" });
+  },
+});
+
+function mockPreview(label: string, index: number) {
+  const colors = [["#102f2d", "#df8d52"], ["#5d2722", "#e6bd72"], ["#1d3858", "#78a6a0"]][index % 3];
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="${colors[0]}"/><stop offset="1" stop-color="${colors[1]}"/></linearGradient></defs><rect width="100%" height="100%" fill="url(#g)"/><circle cx="480" cy="220" r="95" fill="#f3d7b2" opacity=".9"/><path d="M300 520 Q340 310 480 320 Q620 310 660 520" fill="#d45b3d" opacity=".9"/><path d="M385 185 Q480 70 575 185 L545 140 L415 140Z" fill="#262b2b"/><text x="48" y="475" font-family="sans-serif" font-size="30" fill="white" opacity=".86">${label.replace(/[<>&]/g, "")}</text><text x="48" y="510" font-family="sans-serif" font-size="18" fill="white" opacity=".6">MOCK PREVIEW · ${index + 1}</text></svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+export function getAccessCode() {
+  return sessionStorage.getItem("great100-access-code") || "";
+}
+
+export function setAccessCode(code: string) {
+  if (code.trim()) sessionStorage.setItem("great100-access-code", code.trim());
+  else sessionStorage.removeItem("great100-access-code");
+}
+
+export async function listProjects(): Promise<ProjectData[]> {
+  if (isTauri()) return invoke("list_projects");
+  const db = await database();
+  const projects = await db.getAll("projects") as ProjectData[];
+  return projects.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+}
+
+export async function createProjectOnDisk(project: ProjectData): Promise<string> {
+  if (isTauri()) return invoke("create_project", { project });
+  const path = `projects/${project.folder_name}`;
+  const db = await database();
+  await db.put("projects", { ...project, project_path: path });
+  return path;
+}
+
+export async function saveProject(project: ProjectData): Promise<void> {
+  if (isTauri()) return invoke("save_project", { project });
+  const db = await database();
+  await db.put("projects", project);
+}
+
+export async function generateImages(request: GenerateRequest): Promise<ImageCandidate[]> {
+  if (isTauri()) return invoke("generate_images", { request });
+  const accessCode = getAccessCode();
+  if (accessCode) {
+    const generated: ImageCandidate[] = [];
+    for (let index = 0; index < request.count; index++) {
+      const response = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessCode}` },
+        body: JSON.stringify({ prompt: request.prompt, reference_image: request.reference_image }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || `이미지 생성 실패 (${response.status})`);
+      const id = crypto.randomUUID();
+      generated.push({
+        id,
+        path: candidatePath(request, id, "jpg"),
+        preview_url: `data:image/jpeg;base64,${result.image_base64}`,
+        created_at: new Date().toISOString(),
+        mode: "openai",
+      });
+    }
+    return generated;
+  }
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const label = request.asset_kind === "scene" ? `SCENE ${String(request.scene_number).padStart(2, "0")}` : request.asset_kind.toUpperCase();
+  return Array.from({ length: request.count }, (_, index) => {
+    const id = crypto.randomUUID();
+    return { id, path: candidatePath(request, id, "svg"), preview_url: mockPreview(label, index), created_at: new Date().toISOString(), mode: "mock" as const };
+  });
+}
+
+type ImageLocation = Pick<GenerateRequest, "project_path" | "asset_kind" | "scene_number">;
+type ImageFormat = { mime: "image/png" | "image/jpeg" | "image/webp"; extension: "png" | "jpg" | "webp" };
+
+export function detectImageFormat(bytes: Uint8Array): ImageFormat | null {
+  if (bytes.length >= 8 && [137, 80, 78, 71, 13, 10, 26, 10].every((value, index) => bytes[index] === value)) return { mime: "image/png", extension: "png" };
+  if (bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return { mime: "image/jpeg", extension: "jpg" };
+  if (bytes.length >= 12 && String.fromCharCode(...bytes.slice(0, 4)) === "RIFF" && String.fromCharCode(...bytes.slice(8, 12)) === "WEBP") return { mime: "image/webp", extension: "webp" };
+  return null;
+}
+
+export async function importImageCandidates(files: File[], location: ImageLocation): Promise<ImageCandidate[]> {
+  if (!files.length) return [];
+  if (files.length > 6) throw new Error("한 번에 최대 6장까지 업로드할 수 있습니다.");
+  const checked = await Promise.all(files.map(async (file) => {
+    if (!file.size || file.size > 12_000_000) throw new Error(`${file.name}: 12MB 이하 이미지만 업로드할 수 있습니다.`);
+    const format = detectImageFormat(new Uint8Array(await file.slice(0, 12).arrayBuffer()));
+    if (!format) throw new Error(`${file.name}: PNG, JPEG, WebP 이미지만 사용할 수 있습니다.`);
+    if (file.type && file.type !== format.mime) throw new Error(`${file.name}: 파일 형식이 확장자 정보와 맞지 않습니다.`);
+    return { file, format };
+  }));
+  const candidates: ImageCandidate[] = [];
+  for (const { file, format } of checked) {
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(new Error(`${file.name}: 파일을 읽지 못했습니다.`));
+      reader.readAsDataURL(file);
+    });
+    const previewUrl = `data:${format.mime};base64,${dataUrl.slice(dataUrl.indexOf(",") + 1)}`;
+    if (isTauri()) {
+      candidates.push(await invoke<ImageCandidate>("import_image", { request: { ...location, data_url: previewUrl } }));
+    } else {
+      const id = crypto.randomUUID();
+      candidates.push({ id, path: candidatePath(location, id, format.extension), preview_url: previewUrl, created_at: new Date().toISOString(), mode: "uploaded" });
+    }
+  }
+  return candidates;
+}
+
+function candidatePath(request: ImageLocation, id: string, extension: string) {
+  const folder = request.asset_kind === "scene" ? `03_images/scene${String(request.scene_number).padStart(2, "0")}` : request.asset_kind === "anchor" ? "02_character" : "04_thumbnail";
+  return `${request.project_path}/${folder}/candidate_${id}.${extension}`;
+}
+
+export async function exportProjectZip(project: ProjectData): Promise<void> {
+  const blob = await buildProjectZip(project);
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${project.folder_name}.zip`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+export async function buildProjectZip(project: ProjectData): Promise<Blob> {
+  const zip = new JSZip();
+  const root = zip.folder(project.folder_name)!;
+  for (const folder of ["01_source", "02_character", "03_images", "04_thumbnail", "05_exports", "06_logs"]) root.folder(folder);
+  root.file("01_source/work_result.txt", project.source_text);
+  const withoutPreviews = structuredClone(project);
+  for (const asset of [withoutPreviews.anchor, withoutPreviews.thumbnail, ...withoutPreviews.scenes]) {
+    asset.candidates = asset.candidates.map(({ preview_url: _preview, ...candidate }) => ({ ...candidate, preview_url: "" }));
+  }
+  root.file("project_data.json", JSON.stringify(withoutPreviews, null, 2));
+  const promptHistory = [
+    ...historyLines("anchor", project.anchor),
+    ...project.scenes.flatMap((scene) => historyLines(`scene${String(scene.number).padStart(2, "0")}`, scene)),
+    ...historyLines("thumbnail", project.thumbnail),
+  ];
+  root.file("06_logs/prompt_history.jsonl", promptHistory.join("\n") + (promptHistory.length ? "\n" : ""));
+  for (const asset of [project.anchor, project.thumbnail, ...project.scenes]) {
+    for (const candidate of asset.candidates) {
+      const blob = await (await fetch(candidate.preview_url)).blob();
+      const path = candidate.path.replace(`${project.project_path}/`, "");
+      root.file(path, blob);
+      if (candidate.id === asset.selected_candidate_id) {
+        const folder = path.slice(0, path.lastIndexOf("/"));
+        const extension = path.split(".").at(-1) || "jpg";
+        root.file(`${folder}/selected.${extension}`, blob);
+      }
+    }
+  }
+  return zip.generateAsync({ type: "blob" });
+}
+
+function historyLines(kind: string, asset: VisualAsset) {
+  return asset.prompt_history.map((revision) => JSON.stringify({ asset_kind: kind, ...revision }));
+}

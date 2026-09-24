@@ -1,0 +1,9 @@
+work/
+src-tauri/
+projects/
+node_modules/
+dist/
+outputs/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
