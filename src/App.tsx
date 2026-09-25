@@ -21,7 +21,7 @@ import {
   WandSparkles,
 } from "lucide-react";
 import { createProjectDraft, DEFAULT_STYLE, parseWorkText } from "./parser";
-import { composeScenePrompt } from "./prompts";
+import { composeScenePrompt, composeThumbnailPrompt } from "./prompts";
 import { createProjectOnDisk, deleteProject, downloadBlob, exportProjectZip, generateImages, getAccessCode, getRenderedVideo, importImageCandidates, isTauri, listProjects, saveProject, saveRenderedVideo, setAccessCode } from "./platform";
 import { buildVideoPlan, renderProjectMp4 } from "./video";
 import { SAMPLE_WORK_TEXT } from "./sample";
@@ -241,15 +241,22 @@ function PageHeading({ eyebrow, title, text }: { eyebrow: string; title: string;
 function AssetStudio({ title, eyebrow, description, asset, project, kind, onChange }: { title: string; eyebrow: string; description: string; asset: VisualAsset; project: ProjectData; kind: "anchor" | "thumbnail"; onChange: (asset: VisualAsset) => void }) {
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const fullPrompt = kind === "thumbnail" ? composeThumbnailPrompt(project) : "";
   const generate = async () => {
     setError("");
+    if (!asset.prompt.trim()) return setError("이미지 내용을 먼저 입력해 주세요.");
     onChange({ ...asset, status: "generating" });
     try {
-      const prompt = `${asset.prompt}\n\n공통 스타일: ${project.style_guide}`;
+      const prompt = kind === "thumbnail" ? fullPrompt : `${asset.prompt}\n\n공통 스타일: ${project.style_guide}`;
       const anchor = project.anchor.candidates.find((candidate) => candidate.id === project.anchor.selected_candidate_id);
       const candidates = await generateImages({ project_path: project.project_path, asset_kind: kind, prompt, count: 3, reference_image: kind === "thumbnail" && anchor?.mode === "openai" ? anchor.preview_url : undefined });
-      onChange({ ...asset, candidates: [...asset.candidates, ...candidates], status: "ready", prompt_history: appendHistory(asset.prompt_history, asset.prompt) });
+      onChange({ ...asset, candidates: [...asset.candidates, ...candidates], status: "ready", prompt_history: appendHistory(asset.prompt_history, prompt) });
     } catch (cause) { setError(String(cause)); onChange({ ...asset, status: "error" }); }
+  };
+  const copyFullPrompt = async () => {
+    try { await navigator.clipboard.writeText(fullPrompt); setCopied(true); setError(""); }
+    catch { setError("복사에 실패했습니다. 아래 전체 프롬프트를 직접 선택해 복사해 주세요."); }
   };
   const upload = async (files: File[]) => {
     setError("");
@@ -262,7 +269,8 @@ function AssetStudio({ title, eyebrow, description, asset, project, kind, onChan
   };
   return <div className="page">
     <PageHeading eyebrow={eyebrow} title={title} text={description} />
-    <PromptEditor value={asset.prompt} historyCount={asset.prompt_history.length} onChange={(prompt) => onChange({ ...asset, prompt })} onGenerate={generate} onUpload={upload} generating={asset.status === "generating"} uploading={uploading} />
+    <PromptEditor heading={kind === "thumbnail" ? "썸네일 내용 (수정 가능)" : "이미지 프롬프트"} value={asset.prompt} historyCount={asset.prompt_history.length} onChange={(prompt) => { setCopied(false); onChange({ ...asset, prompt }); }} onGenerate={generate} onUpload={upload} generating={asset.status === "generating"} uploading={uploading} />
+    {kind === "thumbnail" && <div className="panel full-prompt-panel"><div className="full-prompt-head"><div><strong>복사용 전체 썸네일 프롬프트</strong><small>썸네일 내용 + 인물 외형 + 스타일 조건을 중복 없이 합칩니다.</small></div><button className="btn ghost" disabled={!asset.prompt.trim()} onClick={copyFullPrompt}>{copied ? <Check size={16} /> : <Copy size={16} />}{copied ? "복사됨" : "전체 프롬프트 복사"}</button></div><textarea aria-label="복사용 전체 썸네일 프롬프트" readOnly value={fullPrompt} /></div>}
     {error && <div className="error-banner">{error}</div>}
     <CandidateGrid candidates={asset.candidates} selected={asset.selected_candidate_id} onSelect={(id) => onChange({ ...asset, selected_candidate_id: id })} emptyLabel="이미지를 업로드하거나 후보 3장을 생성해 보세요" />
   </div>;

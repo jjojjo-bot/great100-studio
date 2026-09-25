@@ -39,6 +39,7 @@ export interface CharacterProfile {
 
 export interface VisualAsset {
   prompt: string;
+  full_prompt?: string;
   prompt_history: PromptRevision[];
   candidates: ImageCandidate[];
   selected_candidate_id?: string;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createProjectDraft, DEFAULT_STYLE } from "./parser";
-import { composeScenePrompt } from "./prompts";
+import { composeScenePrompt, composeThumbnailPrompt } from "./prompts";
 import { SAMPLE_WORK_TEXT } from "./sample";
 
 describe("copy-ready scene prompt", () => {
@@ -38,5 +38,22 @@ describe("copy-ready scene prompt", () => {
     expect(prompt).toContain("피와 시신 없음");
     expect(prompt).not.toContain("공통 이미지 조건:");
     expect(prompt).not.toContain("제작안 추가 이미지 조건:");
+  });
+});
+
+describe("copy-ready thumbnail prompt", () => {
+  it("combines thumbnail content, appearance and style without redundant headings", () => {
+    const project = createProjectDraft(2, "이순신", "장군 · 지도자", SAMPLE_WORK_TEXT);
+    project.style_guide = "공통 이미지 조건: 16:9, no text, 피와 시신 없음";
+    project.thumbnail.prompt = "푸른 바다 앞의 이순신 장군, no watermark";
+    const prompt = composeThumbnailPrompt(project);
+    expect(prompt).toContain(project.thumbnail.prompt);
+    expect(prompt).toContain(project.character_profile.description);
+    expect(prompt).toContain("피와 시신 없음");
+    expect(prompt.match(/16:9/g)).toHaveLength(1);
+    expect(prompt.match(/no text/g)).toHaveLength(1);
+    expect(prompt.match(/no watermark/g)).toHaveLength(1);
+    expect(prompt).not.toContain("공통 스타일:");
+    expect(prompt).not.toContain("공통 이미지 조건:");
   });
 });

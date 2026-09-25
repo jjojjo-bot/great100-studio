@@ -21,9 +21,13 @@ describe("project export", () => {
     const fullPrompt = await zip.file(`${folder}03_images/scene01/image_prompt.txt`)!.async("string");
     expect(fullPrompt).toContain(project.character_profile.description);
     expect(fullPrompt).toContain(project.style_guide);
+    const thumbnailPrompt = await zip.file(`${folder}04_thumbnail/image_prompt.txt`)!.async("string");
+    expect(thumbnailPrompt).toContain(project.thumbnail.prompt);
+    expect(thumbnailPrompt).toContain(project.character_profile.description);
     const metadata = JSON.parse(await zip.file(`${folder}project_data.json`)!.async("string"));
     expect(metadata.anchor.candidates[0].preview_url).toBe("");
     expect(metadata.scenes[0].full_prompt).toBe(fullPrompt);
+    expect(metadata.thumbnail.full_prompt).toBe(thumbnailPrompt);
   });
 
   it("includes an uploaded selection in the standard folder", async () => {

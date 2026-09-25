@@ -28,6 +28,14 @@ export function composeScenePrompt(project: Pick<ProjectData, "person" | "charac
   return parts.join("\n\n");
 }
 
-export function withFullScenePrompts(project: ProjectData): ProjectData {
-  return { ...project, scenes: project.scenes.map((scene) => ({ ...scene, full_prompt: composeScenePrompt(project, scene) })) };
+export function composeThumbnailPrompt(project: Pick<ProjectData, "person" | "character_profile" | "style_guide" | "thumbnail">): string {
+  return composeScenePrompt(project, { prompt: project.thumbnail.prompt });
+}
+
+export function withFullImagePrompts(project: ProjectData): ProjectData {
+  return {
+    ...project,
+    scenes: project.scenes.map((scene) => ({ ...scene, full_prompt: composeScenePrompt(project, scene) })),
+    thumbnail: { ...project.thumbnail, full_prompt: composeThumbnailPrompt(project) },
+  };
 }

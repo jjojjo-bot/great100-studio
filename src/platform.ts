@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openDB } from "idb";
 import JSZip from "jszip";
-import { composeScenePrompt, withFullScenePrompts } from "./prompts";
+import { composeScenePrompt, composeThumbnailPrompt, withFullImagePrompts } from "./prompts";
 import type { GenerateRequest, ImageCandidate, ProjectData, VisualAsset } from "./types";
 
 export const isTauri = () => "__TAURI_INTERNALS__" in window;
@@ -44,7 +44,7 @@ export async function createProjectOnDisk(project: ProjectData): Promise<string>
 }
 
 export async function saveProject(project: ProjectData): Promise<void> {
-  const complete = withFullScenePrompts(project);
+  const complete = withFullImagePrompts(project);
   if (isTauri()) return invoke("save_project", { project: complete });
   const db = await database();
   await db.put("projects", complete);
@@ -176,7 +176,7 @@ export async function buildProjectZip(project: ProjectData, video?: Blob): Promi
   const root = zip.folder(project.folder_name)!;
   for (const folder of ["01_source", "02_character", "03_images", "04_thumbnail", "05_exports", "06_logs"]) root.folder(folder);
   root.file("01_source/work_result.txt", project.source_text);
-  const withoutPreviews = structuredClone(withFullScenePrompts(project));
+  const withoutPreviews = structuredClone(withFullImagePrompts(project));
   for (const asset of [withoutPreviews.anchor, withoutPreviews.thumbnail, ...withoutPreviews.scenes]) {
     asset.candidates = asset.candidates.map(({ preview_url: _preview, ...candidate }) => ({ ...candidate, preview_url: "" }));
   }
@@ -184,6 +184,7 @@ export async function buildProjectZip(project: ProjectData, video?: Blob): Promi
   for (const scene of project.scenes) {
     root.file(`03_images/scene${String(scene.number).padStart(2, "0")}/image_prompt.txt`, composeScenePrompt(project, scene));
   }
+  root.file("04_thumbnail/image_prompt.txt", composeThumbnailPrompt(project));
   if (video) root.file(`05_exports/${project.folder_name}.mp4`, video);
   const promptHistory = [
     ...historyLines("anchor", project.anchor),
