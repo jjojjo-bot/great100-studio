@@ -115,6 +115,33 @@ describe("MP4 background music rendering", () => {
     expect(drawn).toContain("앞문장");
     expect(drawn).toContain("뒷문장");
   });
+
+  it("선택한 보조 이미지와 썸네일을 실제 MP4 프레임에 그린다", async () => {
+    const images: string[] = [];
+    const text: string[] = [];
+    vi.stubGlobal("Image", class { naturalWidth = 1920; naturalHeight = 1080; src = ""; decode = async () => {}; });
+    const canvas = { width: 0, height: 0, getContext: () => ({
+      canvas, fillStyle: "", font: "", textAlign: "", textBaseline: "", globalAlpha: 1,
+      fillRect: () => {}, drawImage: (image: { src: string }) => { images.push(image.src); },
+      fillText: (value: string) => { text.push(value); }, measureText: (value: string) => ({ width: value.length * 10 }),
+    }) };
+    vi.stubGlobal("document", { createElement: () => canvas });
+    const project = createProjectDraft(2, "이순신", "장군 · 지도자", SAMPLE_WORK_TEXT);
+    project.scenes = [project.scenes[0]];
+    project.scenes[0].duration = 2;
+    project.scenes[0].candidates = [{ id: "main", path: "main.png", preview_url: "main-url", created_at: "now", mode: "uploaded" }];
+    project.scenes[0].selected_candidate_id = "main";
+    project.scenes[0].support_candidates = [{ id: "support", path: "support.png", preview_url: "support-url", created_at: "now", mode: "uploaded" }];
+    project.scenes[0].support_selected_candidate_id = "support";
+    project.thumbnail.candidates = [{ id: "thumb", path: "thumb.png", preview_url: "thumbnail-url", created_at: "now", mode: "uploaded" }];
+    project.thumbnail.selected_candidate_id = "thumb";
+    project.ending_message = "고맙습니다";
+    await renderProjectMp4(project);
+    expect(images).toContain("main-url");
+    expect(images).toContain("support-url");
+    expect(images).toContain("thumbnail-url");
+    expect(text).toContain("이순신");
+  });
 });
 
 afterEach(() => vi.unstubAllGlobals());

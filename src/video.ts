@@ -12,6 +12,8 @@ export interface VideoSegment {
   timedCaptions?: CaptionBlock[];
   emphasisSubtitle?: string;
   imageUrl?: string;
+  supportImageUrl?: string;
+  supportStartsAt?: number;
   duration: number;
   motion: Exclude<ImageMotion, "auto">;
   musicVolume: number;
@@ -37,16 +39,22 @@ export function buildVideoPlan(project: ProjectData): VideoSegment[] {
   const scenes: VideoSegment[] = [...project.scenes].sort((a, b) => a.number - b.number).map((scene, index) => {
     const image = scene.candidates.find((candidate) => candidate.id === scene.selected_candidate_id);
     if (!image) throw new Error(`Scene ${String(scene.number).padStart(2, "0")}의 이미지를 선택해 주세요.`);
+    const support = scene.support_candidates?.find((candidate) => candidate.id === scene.support_selected_candidate_id);
+    if (scene.support_selected_candidate_id && !support) throw new Error(`Scene ${String(scene.number).padStart(2, "0")}의 선택한 보조 이미지를 찾지 못했습니다.`);
     const duration = scene.duration ?? 10;
     if (!Number.isFinite(duration) || duration < 1 || duration > 120) throw new Error(`Scene ${scene.number}의 길이는 1~120초여야 합니다.`);
     return { title: scene.title, caption: project.schema_version === "2.1" ? scene.narration || "" : scene.caption ?? scene.title,
       timedCaptions: project.schema_version === "2.1" ? scene.captions?.map((block) => ({ ...block, start_sec: block.start_sec - (scene.start_sec || 0), end_sec: block.end_sec - (scene.start_sec || 0) })) : undefined,
       emphasisSubtitle: project.schema_version === "2.1" ? scene.subtitle : undefined,
-      imageUrl: image.preview_url, duration, motion: resolveImageMotion(scene.motion, index), musicVolume: sceneMusicVolume(scene.music_volume) };
+      imageUrl: image.preview_url, supportImageUrl: support?.preview_url, supportStartsAt: support ? duration / 2 : undefined,
+      duration, motion: resolveImageMotion(scene.motion, index), musicVolume: sceneMusicVolume(scene.music_volume) };
   });
-  const total = scenes.reduce((sum, scene) => sum + scene.duration, 0) + (project.ending_message.trim() ? 4 : 0);
+  const thumbnail = project.thumbnail.candidates.find((candidate) => candidate.id === project.thumbnail.selected_candidate_id);
+  if (project.thumbnail.selected_candidate_id && !thumbnail) throw new Error("선택한 썸네일 이미지를 찾지 못했습니다.");
+  const hasEnding = !!project.ending_message.trim() || !!thumbnail;
+  const total = scenes.reduce((sum, scene) => sum + scene.duration, 0) + (hasEnding ? 4 : 0);
   if (total > 900) throw new Error("영상 길이는 15분 이하로 설정해 주세요.");
-  if (project.ending_message.trim()) scenes.push({ title: "엔딩", caption: project.ending_message.trim(), duration: 4, motion: "none", musicVolume: scenes.at(-1)?.musicVolume ?? 45, ending: true });
+  if (hasEnding) scenes.push({ title: "엔딩", caption: project.ending_message.trim(), imageUrl: thumbnail?.preview_url, duration: 4, motion: "none", musicVolume: scenes.at(-1)?.musicVolume ?? 45, ending: true });
   return scenes;
 }
 
@@ -145,7 +153,7 @@ export function activeTimedCaption(blocks: CaptionBlock[], seconds: number): str
   return blocks.find((block) => seconds >= block.start_sec && seconds < block.end_sec)?.text || "";
 }
 
-function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null, caption: string, progress: number, person: string, motion: VideoSegment["motion"], emphasis = "", emphasisAge = 0) {
+function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null, caption: string, progress: number, person: string, motion: VideoSegment["motion"], emphasis = "", emphasisAge = 0, supportImage: HTMLImageElement | null = null, supportOpacity = 0, supportProgress = 0, ending = false) {
   const { width, height } = ctx.canvas;
   ctx.fillStyle = "#172b29";
   ctx.fillRect(0, 0, width, height);
@@ -158,10 +166,28 @@ function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null
     gradient.addColorStop(1, "#a96943");
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, width, height);
-    ctx.fillStyle = "#f4dfbd";
+  }
+
+  if (supportImage && supportOpacity > 0) {
+    const placement = imagePlacement(supportImage.naturalWidth, supportImage.naturalHeight, width, height, motion, supportProgress);
+    ctx.globalAlpha = supportOpacity;
+    ctx.drawImage(supportImage, placement.x, placement.y, placement.width, placement.height);
+    ctx.globalAlpha = 1;
+  }
+
+  if (ending) {
+    if (image) { ctx.fillStyle = "rgba(18, 41, 36, 0.27)"; ctx.fillRect(0, 0, width, height); }
     ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
     ctx.font = "bold 55px sans-serif";
-    ctx.fillText(person, width / 2, height / 2 - 50);
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = "rgba(22, 43, 37, 0.9)";
+    ctx.shadowColor = "rgba(13, 32, 27, 0.8)";
+    ctx.shadowBlur = 16;
+    ctx.strokeText?.(person, width / 2, height / 2 - 50, width - 160);
+    ctx.fillStyle = "#f4dfbd";
+    ctx.fillText(person, width / 2, height / 2 - 50, width - 160);
+    ctx.shadowBlur = 0;
   }
 
   if (emphasis.trim()) {
@@ -291,11 +317,20 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
         try { image = await loadImage(segment.imageUrl); }
         catch { throw new Error(`${segment.title} 이미지를 읽지 못했습니다. 다시 업로드하거나 생성해 주세요.`); }
       }
+      let supportImage: HTMLImageElement | null = null;
+      if (segment.supportImageUrl) {
+        try { supportImage = await loadImage(segment.supportImageUrl); }
+        catch { throw new Error(`${segment.title} 보조 이미지를 읽지 못했습니다. 다시 업로드하거나 선택해 주세요.`); }
+      }
       for (let localFrame = 0; localFrame < frameCounts[segmentIndex]; localFrame++) {
         const progress = frameCounts[segmentIndex] === 1 ? 0 : localFrame / (frameCounts[segmentIndex] - 1);
         const seconds = localFrame / VIDEO_FPS;
         const part = segment.timedCaptions ? activeTimedCaption(segment.timedCaptions, seconds) : captions[segmentIndex][Math.min(captions[segmentIndex].length - 1, Math.floor(progress * captions[segmentIndex].length))];
-        drawFrame(ctx, image, part, progress, project.person, segment.motion, segment.emphasisSubtitle && seconds < 3 ? segment.emphasisSubtitle : "", seconds);
+        const supportStart = segment.supportStartsAt ?? Infinity;
+        const fadeDuration = Math.min(0.6, segment.duration / 8);
+        const supportOpacity = supportImage ? Math.max(0, Math.min(1, (seconds - supportStart) / fadeDuration)) : 0;
+        const supportProgress = supportImage ? Math.max(0, Math.min(1, (seconds - supportStart) / Math.max(0.01, segment.duration - supportStart))) : 0;
+        drawFrame(ctx, image, part, progress, project.person, segment.motion, segment.emphasisSubtitle && seconds < 3 ? segment.emphasisSubtitle : "", seconds, supportImage, supportOpacity, supportProgress, !!segment.ending);
         await source.add(frame / VIDEO_FPS, 1 / VIDEO_FPS);
         frame++;
         if (frame % 7 === 0 || frame === totalFrames) await feedAudioUntil(Math.min(totalFrames / VIDEO_FPS, frame / VIDEO_FPS + 0.5));

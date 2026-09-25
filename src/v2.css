@@ -51,3 +51,7 @@
 .caption-settings label{width:185px}
 .caption-settings select{margin-top:5px}
 @media(max-width:850px){.caption-block-row{grid-template-columns:20px 1fr 75px 75px}}
+.support-hint{font-size:11px;color:#60776d;margin:5px 0 10px}
+.review-support{display:flex;align-items:center;gap:8px;margin:8px 0}
+.review-support img{width:72px;aspect-ratio:16/9;object-fit:cover;border-radius:5px}
+.review-support small{font-size:10px;color:#6a806f}

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "fake-indexeddb/auto";
 import JSZip from "jszip";
+import { openDB } from "idb";
 import { createProjectDraft } from "./parser";
 import { buildProjectZip, createProjectOnDisk, deleteProject, detectImageFormat, detectMusicFormat, getBackgroundMusic, getRenderedVideo, importImageCandidates, listProjects, removeBackgroundMusic, saveBackgroundMusic, saveProject, saveRenderedVideo } from "./platform";
 import { SAMPLE_WORK_TEXT } from "./sample";
@@ -124,6 +125,19 @@ describe("project deletion", () => {
     expect(remaining.some((item) => item.id === removed.id)).toBe(false);
     expect(remaining.some((item) => item.id === kept.id)).toBe(true);
     expect(await getRenderedVideo(removed)).toBeNull();
+  });
+});
+
+describe("video cache", () => {
+  it("requires a new MP4 when the rendering layout changes", async () => {
+    vi.stubGlobal("window", {});
+    const project = createProjectDraft(25, "영상 시험", "장군 · 지도자", SAMPLE_WORK_TEXT);
+    project.project_path = await createProjectOnDisk(project);
+    const db = await openDB("great100-studio", 3);
+    await db.put("videos", { id: project.id, updated_at: project.updated_at, blob: new Blob(["old"], { type: "video/mp4" }) });
+    expect(await getRenderedVideo(project)).toBeNull();
+    await saveRenderedVideo(project, new Blob(["new"], { type: "video/mp4" }));
+    expect((await getRenderedVideo(project))?.size).toBe(3);
   });
 });
 

@@ -24,6 +24,21 @@ describe("MP4 제작 계획", () => {
     expect(plan.at(-1)).toMatchObject({ ending: true, duration: 4, motion: "none" });
   });
 
+  it("선택한 보조 이미지를 장면 후반부에, 썸네일을 마지막 이름 화면에 연결한다", () => {
+    const project = createProjectDraft(2, "이순신", "장군 · 지도자", SAMPLE_WORK_TEXT);
+    project.scenes = [project.scenes[0]];
+    project.scenes[0].duration = 10;
+    project.scenes[0].candidates = [{ id: "main", path: "main.png", preview_url: "main-url", created_at: "now", mode: "uploaded" }];
+    project.scenes[0].selected_candidate_id = "main";
+    project.scenes[0].support_candidates = [{ id: "support", path: "support.png", preview_url: "support-url", created_at: "now", mode: "uploaded" }];
+    project.scenes[0].support_selected_candidate_id = "support";
+    project.thumbnail.candidates = [{ id: "thumb", path: "thumb.png", preview_url: "thumbnail-url", created_at: "now", mode: "uploaded" }];
+    project.thumbnail.selected_candidate_id = "thumb";
+    const plan = buildVideoPlan(project);
+    expect(plan[0]).toMatchObject({ imageUrl: "main-url", supportImageUrl: "support-url", supportStartsAt: 5 });
+    expect(plan.at(-1)).toMatchObject({ imageUrl: "thumbnail-url", ending: true, duration: 4 });
+  });
+
   it("긴 내레이션을 빠짐없이 짧은 자막들로 나눈다", () => {
     const original = "이순신은 군사들을 모았습니다. 배와 무기를 점검하고 바닷길을 살폈습니다. 많은 적선이 다가왔지만 동료들과 함께 힘을 모았습니다. 그리고 마지막까지 책임을 다했습니다.";
     const parts = captionParts(original);

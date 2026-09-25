@@ -6,6 +6,7 @@ import { composeScenePrompt, composeThumbnailPrompt, withFullImagePrompts } from
 import type { BackgroundMusic, GenerateRequest, ImageCandidate, ProjectData, VisualAsset } from "./types";
 
 export const isTauri = () => "__TAURI_INTERNALS__" in window;
+const VIDEO_RENDER_VERSION = 2;
 
 const database = () => openDB("great100-studio", 3, {
   upgrade(db) {
@@ -226,13 +227,13 @@ export async function saveRenderedVideo(project: ProjectData, blob: Blob): Promi
     await invoke("save_video", { projectPath: project.project_path, dataUrl: `data:video/mp4;base64,${btoa(binary)}` });
   }
   const db = await database();
-  await db.put("videos", { id: project.id, updated_at: project.updated_at, blob });
+  await db.put("videos", { id: project.id, updated_at: project.updated_at, render_version: VIDEO_RENDER_VERSION, blob });
 }
 
 export async function getRenderedVideo(project: ProjectData): Promise<Blob | null> {
   const db = await database();
-  const saved = await db.get("videos", project.id) as { updated_at: string; blob: Blob } | undefined;
-  return saved?.updated_at === project.updated_at ? saved.blob : null;
+  const saved = await db.get("videos", project.id) as { updated_at: string; render_version?: number; blob: Blob } | undefined;
+  return saved?.updated_at === project.updated_at && saved.render_version === VIDEO_RENDER_VERSION ? saved.blob : null;
 }
 
 export async function exportProjectZip(project: ProjectData): Promise<void> {

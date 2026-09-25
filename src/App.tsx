@@ -171,7 +171,7 @@ function App() {
           {step === 3 && project && <Preflight project={project} />}
           {step === 4 && project && <AssetStudio title="인물 기준 이미지" eyebrow="CHARACTER ANCHOR" description="얼굴 일관성을 위한 기준 이미지입니다. 업로드한 이미지가 있으면 생성 단계를 건너뛰어도 됩니다." asset={project.anchor} project={project} kind="anchor" onChange={(anchor) => persist({ ...project, anchor })} />}
           {step === 5 && project && <SceneStudio project={project} onChange={updateScene} onProjectChange={persist} />}
-          {step === 6 && project && <AssetStudio title="썸네일 만들기" eyebrow="THUMBNAIL" description="영상의 첫인상을 결정할 대표 이미지를 선택하세요. 썸네일은 ZIP에 보관되며 영상 본편에는 들어가지 않습니다." asset={project.thumbnail} project={project} kind="thumbnail" onChange={(thumbnail) => persist({ ...project, thumbnail })} />}
+          {step === 6 && project && <AssetStudio title="썸네일 만들기" eyebrow="THUMBNAIL" description="대표 이미지를 선택하세요. 선택한 썸네일은 영상 마지막 인물 이름 화면의 배경에도 사용됩니다." asset={project.thumbnail} project={project} kind="thumbnail" onChange={(thumbnail) => persist({ ...project, thumbnail })} />}
           {step === 7 && project && <ImageReview project={project} />}
           {step === 8 && project && <Complete project={project} onDownload={() => download(project)} />}
         </section>
@@ -290,7 +290,7 @@ function Preflight({ project }: { project: ProjectData }) {
 function ImageReview({ project }: { project: ProjectData }) {
   const errors = completionErrors(project);
   return <div className="page"><PageHeading eyebrow="FINAL IMAGE REVIEW" title="전체 이미지를 한 번 더 확인하세요" text="Scene 순서와 핵심 업적 장면, 썸네일을 검토한 뒤 MP4를 만듭니다." />
-    <div className="review-image-grid">{project.scenes.map((scene) => { const image = scene.candidates.find((candidate) => candidate.id === scene.selected_candidate_id); return <div className="panel review-image-card" key={scene.id}>{image ? <img src={image.preview_url} alt={`${scene.title} 선택 이미지`} /> : <div className="candidate-empty">이미지 미선택</div>}<strong>{scene.source_scene_id || `Scene ${scene.number}`} · {scene.title}</strong>{project.source?.core_achievement.scene_id === scene.source_scene_id && <em>★ 핵심 업적</em>}</div>; })}</div>
+    <div className="review-image-grid">{project.scenes.map((scene) => { const image = scene.candidates.find((candidate) => candidate.id === scene.selected_candidate_id); const support = scene.support_candidates?.find((candidate) => candidate.id === scene.support_selected_candidate_id); return <div className="panel review-image-card" key={scene.id}>{image ? <img src={image.preview_url} alt={`${scene.title} 선택 이미지`} /> : <div className="candidate-empty">이미지 미선택</div>}<strong>{scene.source_scene_id || `Scene ${scene.number}`} · {scene.title}</strong>{support && <div className="review-support"><img src={support.preview_url} alt={`${scene.title} 보조 이미지`} /><small>후반부 보조 이미지</small></div>}{project.source?.core_achievement.scene_id === scene.source_scene_id && <em>★ 핵심 업적</em>}</div>; })}</div>
     <div className="panel"><h3>썸네일</h3>{project.thumbnail.candidates.find((candidate) => candidate.id === project.thumbnail.selected_candidate_id) ? <img className="review-thumbnail" src={project.thumbnail.candidates.find((candidate) => candidate.id === project.thumbnail.selected_candidate_id)!.preview_url} alt="선택 썸네일" /> : <p>선택된 썸네일이 없습니다.</p>}</div>
     {errors.length > 0 && <div className="error-banner"><strong>완료 전 확인할 항목</strong><ul>{errors.map((error, index) => <li key={index}>{error}</li>)}</ul></div>}
   </div>;
@@ -415,7 +415,7 @@ function SceneStudio({ project, onChange, onProjectChange }: { project: ProjectD
     setSupportBusy(true); setError("");
     try {
       const candidates = await generateImages({ project_path: project.project_path, asset_kind: "support", scene_number: scene.number, prompt: `${scene.support_image_prompt}\n\n${project.style_guide}\nno text, no letters, no captions, no watermark. 16:9.`, count: 2 });
-      onChange({ ...scene, support_candidates: [...(scene.support_candidates || []), ...candidates], support_prompt_history: appendHistory(scene.support_prompt_history || [], scene.support_image_prompt) });
+      onChange({ ...scene, support_candidates: [...(scene.support_candidates || []), ...candidates], support_selected_candidate_id: scene.support_selected_candidate_id || candidates[0]?.id, support_prompt_history: appendHistory(scene.support_prompt_history || [], scene.support_image_prompt) });
     } catch (cause) { setError(String(cause)); }
     finally { setSupportBusy(false); }
   };
@@ -442,7 +442,7 @@ function SceneStudio({ project, onChange, onProjectChange }: { project: ProjectD
     <div className="panel music-volume-panel"><label><strong>이 장면의 배경음악 볼륨</strong><small>{project.background_music ? "장면이 바뀔 때 볼륨도 부드럽게 바뀝니다." : "음악을 추가하면 이 설정이 적용됩니다."}</small><input aria-label="장면 배경음악 볼륨" type="range" min="0" max="100" step="1" value={sceneMusicVolume(scene.music_volume)} onChange={(event) => onChange({ ...scene, music_volume: Number(event.target.value) })} /></label><output>{sceneMusicVolume(scene.music_volume)}%</output></div>
     {error && <div className="error-banner">{error}</div>}
     <CandidateGrid candidates={scene.candidates} selected={scene.selected_candidate_id} onSelect={(id) => onChange({ ...scene, selected_candidate_id: id })} emptyLabel="이 장면의 이미지를 업로드하거나 생성해 보세요" />
-    {project.schema_version !== 1 && scene.support_image_prompt && <><div className="panel support-panel"><h3>보조 이미지 · 별도 생성</h3><textarea aria-label="보조 이미지 프롬프트" value={scene.support_image_prompt} onChange={(event) => onChange({ ...scene, support_image_prompt: event.target.value })} /><div className="prompt-actions"><label className="btn ghost support-upload">보조 이미지 업로드<input type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => { const files = Array.from(event.target.files || []); event.target.value = ""; if (files.length) void uploadSupport(files); }} /></label><button className="btn primary" disabled={supportBusy} onClick={generateSupport}>{supportBusy ? "처리 중…" : "보조 후보 2장 생성"}</button></div></div><CandidateGrid candidates={scene.support_candidates || []} selected={scene.support_selected_candidate_id} onSelect={(id) => onChange({ ...scene, support_selected_candidate_id: id })} emptyLabel="보조 이미지는 선택 사항입니다" /></>}
+    {project.schema_version !== 1 && scene.support_image_prompt && <><div className="panel support-panel"><h3>보조 이미지 · 별도 생성</h3><p className="support-hint">선택한 보조 이미지는 이 장면의 후반부에 부드럽게 전환되어 MP4에 들어갑니다.</p><textarea aria-label="보조 이미지 프롬프트" value={scene.support_image_prompt} onChange={(event) => onChange({ ...scene, support_image_prompt: event.target.value })} /><div className="prompt-actions"><label className="btn ghost support-upload">보조 이미지 업로드<input type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => { const files = Array.from(event.target.files || []); event.target.value = ""; if (files.length) void uploadSupport(files); }} /></label><button className="btn primary" disabled={supportBusy} onClick={generateSupport}>{supportBusy ? "처리 중…" : "보조 후보 2장 생성"}</button></div></div><CandidateGrid candidates={scene.support_candidates || []} selected={scene.support_selected_candidate_id} onSelect={(id) => onChange({ ...scene, support_selected_candidate_id: id })} emptyLabel="보조 이미지는 선택 사항입니다" /></>}
   </div>;
 }
 
@@ -502,7 +502,7 @@ function Complete({ project, onDownload }: { project: ProjectData; onDownload: (
     <div className="complete-mark"><Check size={42} /></div>
     <div className="eyebrow">VIDEO EXPORT</div>
     <h2>{project.person} 편 영상 만들기</h2>
-    <p>선택한 장면 이미지에 줌·이동 효과와 자막{project.background_music ? "·배경음악" : ""}을 넣어 MP4를 만듭니다. 내레이션 음성은 포함되지 않습니다.</p>
+    <p>장면의 메인·보조 이미지에 줌·이동 효과와 자막{project.background_music ? "·배경음악" : ""}을 넣고, 마지막에 썸네일 배경의 인물 이름 화면을 더합니다. 내레이션 음성은 포함되지 않습니다.</p>
     <div className="summary-cards"><div><span>회차</span><strong>{String(project.episode).padStart(3, "0")}</strong></div><div><span>선택 장면</span><strong>{sceneDone}/{project.scenes.length}</strong></div><div><span>영상 길이</span><strong>{duration ? `${duration}초` : "이미지 확인"}</strong></div></div>
     <div className="folder-tree"><FolderOpen size={22} /><div><strong>{project.project_path}</strong><small>완성 MP4: 05_exports/{project.folder_name}.mp4 · 1280×720 · {project.background_music ? "배경음악 포함" : "무음"}</small></div></div>
     <div className="video-actions"><button className="btn primary export-button" disabled={rendering} onClick={makeVideo}>{rendering ? <LoaderCircle className="spin" size={17} /> : <Download size={17} />}{rendering ? `MP4 만드는 중… ${percent}%` : video ? "MP4 다시 만들기" : "MP4 만들기"}</button>{video && <><button className="btn ghost export-button" onClick={() => downloadBlob(video, `${project.folder_name}.mp4`)}><Download size={17} /> MP4 다시 다운로드</button>{!isTauri() && <button className="btn ghost export-button" onClick={onDownload}><Download size={17} /> MP4 포함 ZIP 다운로드</button>}</>}</div>
