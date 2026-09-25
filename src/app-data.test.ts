@@ -79,6 +79,14 @@ describe("APP_DATA v2", () => {
     expect(project.scenes[0].subtitle).toBe("생각 1");
     expect(project.scenes[0].captions?.[0].text).toBe("세종이 새 글자를 생각했습니다 1");
     expect(project.source?.scenes[0].captions?.[0].text).toBe("세종이 새 글자를 생각했습니다 1");
+    project.scenes[0].subtitle = "";
+    expect(reportForProject(project).errors).toEqual([]);
+    data.scenes[0].subtitle = "";
+    expect(validateAppData(data).errors).toEqual([]);
+    delete data.scenes[0].subtitle;
+    expect(validateAppData(data).errors).toEqual([]);
+    data.scenes[0].subtitle = null;
+    expect(validateAppData(data).errors).toEqual([]);
     data.scenes[2].captions![0].end_sec = data.scenes[2].end_sec + 1;
     expect(validateAppData(data).errors).toContain("scene_03 Caption 1 시간이 Scene 범위를 벗어났습니다.");
     data.scenes[2].captions![0].end_sec = data.scenes[2].end_sec;

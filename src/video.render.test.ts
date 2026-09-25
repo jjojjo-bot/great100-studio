@@ -79,10 +79,11 @@ describe("MP4 background music rendering", () => {
 
   it("v2.1 MP4는 강조 문구와 시간별 전체 자막을 별도로 그린다", async () => {
     const drawn: string[] = [];
+    const rectangles: Array<[number, number, number, number]> = [];
     vi.stubGlobal("Image", class { naturalWidth = 1920; naturalHeight = 1080; src = ""; decode = async () => {}; });
     const canvas = { width: 0, height: 0, getContext: () => ({
       canvas, fillStyle: "", font: "", textAlign: "", textBaseline: "",
-      fillRect: () => {}, drawImage: () => {}, fillText: (text: string) => { drawn.push(text); },
+      fillRect: (x: number, y: number, width: number, height: number) => { rectangles.push([x, y, width, height]); }, drawImage: () => {}, fillText: (text: string) => { drawn.push(text); },
       measureText: (text: string) => ({ width: text.length * 10 }),
     }) };
     vi.stubGlobal("document", { createElement: () => canvas });
@@ -106,6 +107,13 @@ describe("MP4 background music rendering", () => {
     expect(drawn).toContain("앞문장");
     expect(drawn).toContain("뒷문장");
     expect(drawn).not.toContain(project.scenes[0].caption);
+    expect(rectangles.every(([, , width, height]) => width === 1280 && height === 720)).toBe(true);
+    drawn.length = 0;
+    project.scenes[0].subtitle = "";
+    await renderProjectMp4(project);
+    expect(drawn).not.toContain("강조 문구");
+    expect(drawn).toContain("앞문장");
+    expect(drawn).toContain("뒷문장");
   });
 });
 

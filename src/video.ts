@@ -145,7 +145,7 @@ export function activeTimedCaption(blocks: CaptionBlock[], seconds: number): str
   return blocks.find((block) => seconds >= block.start_sec && seconds < block.end_sec)?.text || "";
 }
 
-function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null, caption: string, progress: number, person: string, motion: VideoSegment["motion"], emphasis = "") {
+function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null, caption: string, progress: number, person: string, motion: VideoSegment["motion"], emphasis = "", emphasisAge = 0) {
   const { width, height } = ctx.canvas;
   ctx.fillStyle = "#172b29";
   ctx.fillRect(0, 0, width, height);
@@ -165,13 +165,34 @@ function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null
   }
 
   if (emphasis.trim()) {
-    ctx.font = "bold 50px sans-serif";
-    ctx.fillStyle = "rgba(10, 24, 23, 0.75)";
-    ctx.fillRect(120, 96, width - 240, 88);
-    ctx.fillStyle = "#ffffff";
-    ctx.textAlign = "center";
+    let size = 50;
+    let lines: string[] = [];
+    do {
+      ctx.font = `bold ${size}px sans-serif`;
+      lines = wrapCaption(ctx, emphasis, width * 0.63);
+      if (lines.length <= 2 || size <= 30) break;
+      size -= 3;
+    } while (true);
+    if (lines.length > 2) lines = [lines[0], lines.slice(1).join(" ")];
+    const opacity = Math.max(0, Math.min(1, emphasisAge / 0.3, (3 - emphasisAge) / 0.45));
+    ctx.globalAlpha = opacity;
+    ctx.textAlign = "left";
     ctx.textBaseline = "middle";
-    ctx.fillText(emphasis, width / 2, 140, width - 280);
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = "rgba(31, 48, 42, 0.88)";
+    ctx.shadowColor = "rgba(20, 35, 31, 0.68)";
+    ctx.shadowBlur = 16;
+    ctx.shadowOffsetY = 3;
+    const top = 90 + (1 - opacity) * 8;
+    lines.forEach((line, index) => {
+      const y = top + index * (size + 12);
+      ctx.strokeText?.(line, 100, y, width * 0.7);
+      ctx.fillStyle = "#ffe7aa";
+      ctx.fillText(line, 100, y, width * 0.7);
+    });
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
+    ctx.globalAlpha = 1;
   }
   if (!caption.trim()) return;
   let fontSize = 43;
@@ -183,14 +204,23 @@ function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null
     fontSize -= 3;
   } while (true);
   if (!lines.length) return;
+  if (lines.length > 2) lines = [lines[0], lines.slice(1).join(" ")];
   const lineHeight = fontSize + 15;
-  const bandHeight = Math.max(110, lines.length * lineHeight + 44);
-  ctx.fillStyle = "rgba(10, 24, 23, 0.79)";
-  ctx.fillRect(0, height - bandHeight, width, bandHeight);
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillStyle = "#ffffff";
-  lines.forEach((line, index) => ctx.fillText(line, width / 2, height - bandHeight / 2 + (index - (lines.length - 1) / 2) * lineHeight));
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = "rgba(17, 36, 32, 0.9)";
+  ctx.shadowColor = "rgba(12, 28, 26, 0.8)";
+  ctx.shadowBlur = 12;
+  ctx.shadowOffsetY = 3;
+  lines.forEach((line, index) => {
+    const y = height - 62 - (lines.length - 1 - index) * lineHeight;
+    ctx.strokeText?.(line, width / 2, y, width - 130);
+    ctx.fillStyle = "#fff9ed";
+    ctx.fillText(line, width / 2, y, width - 130);
+  });
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
 }
 
 async function loadImage(url: string): Promise<HTMLImageElement> {
@@ -265,7 +295,7 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
         const progress = frameCounts[segmentIndex] === 1 ? 0 : localFrame / (frameCounts[segmentIndex] - 1);
         const seconds = localFrame / VIDEO_FPS;
         const part = segment.timedCaptions ? activeTimedCaption(segment.timedCaptions, seconds) : captions[segmentIndex][Math.min(captions[segmentIndex].length - 1, Math.floor(progress * captions[segmentIndex].length))];
-        drawFrame(ctx, image, part, progress, project.person, segment.motion, segment.emphasisSubtitle && seconds < 3 ? segment.emphasisSubtitle : "");
+        drawFrame(ctx, image, part, progress, project.person, segment.motion, segment.emphasisSubtitle && seconds < 3 ? segment.emphasisSubtitle : "", seconds);
         await source.add(frame / VIDEO_FPS, 1 / VIDEO_FPS);
         frame++;
         if (frame % 7 === 0 || frame === totalFrames) await feedAudioUntil(Math.min(totalFrames / VIDEO_FPS, frame / VIDEO_FPS + 0.5));

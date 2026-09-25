@@ -117,7 +117,7 @@ export interface AppDataV2 {
     id: string; order: number; start_sec: number; end_sec: number; narration: string;
     scene_description: string; visual_type: string; shot_type: string; location: string;
     main_subject: string; main_action: string; image_prompt: string;
-    support_image_prompt: string | null; subtitle: string; captions?: CaptionBlock[]; motion: string;
+    support_image_prompt: string | null; subtitle?: string | null; captions?: CaptionBlock[]; motion: string;
     overlay_required?: boolean; overlay_type?: string; overlay_note?: string;
   }>;
   ending: { title: string; message: string };

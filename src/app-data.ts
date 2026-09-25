@@ -58,12 +58,14 @@ export function validateAppData(value: unknown): QualityReport {
   if (!Array.isArray(youtube.hashtags) || !youtube.hashtags.every(nonempty)) errors.push("youtube.hashtags 값이 올바르지 않습니다.");
   const scenes = Array.isArray(root.scenes) ? root.scenes.map(record) : [];
   if (!scenes.length) errors.push("scenes가 비어 있습니다.");
-  const fields = ["id", "narration", "scene_description", "visual_type", "shot_type", "location", "main_subject", "main_action", "image_prompt", "subtitle", "motion"];
+  const fields = ["id", "narration", "scene_description", "visual_type", "shot_type", "location", "main_subject", "main_action", "image_prompt", "motion"];
   scenes.forEach((scene, index) => {
     const expected = `scene_${String(index + 1).padStart(2, "0")}`;
     if (scene.id !== expected) errors.push(`${expected}이 누락되었거나 순서가 잘못되었습니다.`);
     if (scene.order !== index + 1) errors.push(`${expected}의 order는 ${index + 1}이어야 합니다.`);
     textFields(scene, fields, expected, errors);
+    if (root.schema_version === "2.0" && !nonempty(scene.subtitle)) errors.push(`${expected}.subtitle 값이 없습니다.`);
+    if (root.schema_version === "2.1" && scene.subtitle != null && typeof scene.subtitle !== "string") errors.push(`${expected}.subtitle은 문자열 또는 비어 있는 값이어야 합니다.`);
     if (!number(scene.start_sec) || !number(scene.end_sec) || (scene.start_sec as number) >= (scene.end_sec as number)) errors.push(`${expected}의 start_sec/end_sec가 잘못되었습니다.`);
     if (index && number(scene.start_sec) && number(scenes[index - 1].end_sec) && (scenes[index - 1].end_sec as number) > scene.start_sec) errors.push(`${expected}이 이전 Scene과 시간이 겹칩니다.`);
     if (!("support_image_prompt" in scene) || (scene.support_image_prompt !== null && typeof scene.support_image_prompt !== "string")) errors.push(`${expected}의 support_image_prompt는 문자열 또는 null이어야 합니다.`);
@@ -179,7 +181,7 @@ export function createV2ProjectDraft(episode: number, category: string, sourceTe
   const profile = data.character_profile;
   const description = [profile.age, profile.face, profile.eyes, profile.hair, profile.beard, profile.body, profile.outfit, profile.impression].join(", ");
   const scenes: Scene[] = data.scenes.map((source) => ({
-    id: source.id, source_scene_id: source.id, number: source.order, title: source.subtitle,
+    id: source.id, source_scene_id: source.id, number: source.order, title: source.subtitle?.trim() || `Scene ${String(source.order).padStart(2, "0")}`,
     start_sec: source.start_sec, end_sec: source.end_sec, duration: source.end_sec - source.start_sec,
     narration: source.narration, scene_description: source.scene_description,
     visual_type: source.visual_type, shot_type: source.shot_type, location: source.location,
@@ -187,7 +189,7 @@ export function createV2ProjectDraft(episode: number, category: string, sourceTe
     support_image_prompt: source.support_image_prompt, overlay_required: source.overlay_required,
     support_prompt_history: source.support_image_prompt ? [{ prompt: source.support_image_prompt, created_at: now }] : [],
     overlay_type: source.overlay_type, overlay_note: source.overlay_note,
-    caption: source.subtitle, subtitle: source.subtitle, captions: source.captions?.map((caption) => ({ ...caption })), motion: imageMotion(source.motion), prompt: source.image_prompt,
+    caption: source.subtitle || "", subtitle: source.subtitle || "", captions: source.captions?.map((caption) => ({ ...caption })), motion: imageMotion(source.motion), prompt: source.image_prompt,
     prompt_history: [{ prompt: source.image_prompt, created_at: now }], candidates: [], status: "idle",
   }));
   return {
