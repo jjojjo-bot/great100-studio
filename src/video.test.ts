@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createProjectDraft } from "./parser";
 import { SAMPLE_WORK_TEXT } from "./sample";
-import { buildVideoPlan, captionParts, imagePlacement, resolveImageMotion } from "./video";
+import { buildVideoPlan, captionParts, imagePlacement, musicGainAtTime, resolveImageMotion, sceneMusicVolume } from "./video";
 
 describe("MP4 제작 계획", () => {
   it("requires a selected image for every scene", () => {
@@ -36,6 +36,18 @@ describe("MP4 제작 계획", () => {
     expect(Array.from({ length: 6 }, (_, index) => resolveImageMotion("auto", index))).toEqual([
       "zoom-in", "pan-left", "zoom-out", "pan-right", "pan-up", "pan-down",
     ]);
+  });
+
+  it("장면별 음악 볼륨을 경계에서 부드럽게 바꾸고 끝에서 페이드아웃한다", () => {
+    const sections = [{ duration: 2, musicVolume: 20 }, { duration: 2, musicVolume: 80 }, { duration: 4, musicVolume: 80 }];
+    expect(sceneMusicVolume(undefined)).toBe(45);
+    expect(sceneMusicVolume(120)).toBe(100);
+    expect(musicGainAtTime(sections, 0)).toBe(0);
+    expect(musicGainAtTime(sections, 1)).toBeCloseTo(0.2);
+    expect(musicGainAtTime(sections, 1.9)).toBeCloseTo(0.5);
+    expect(musicGainAtTime(sections, 2)).toBeCloseTo(0.8);
+    expect(musicGainAtTime(sections, 7.5)).toBeCloseTo(0.8 / 3);
+    expect(musicGainAtTime(sections, 8)).toBe(0);
   });
 
   it("줌과 이동 중에도 이미지가 프레임 전체를 덮는다", () => {

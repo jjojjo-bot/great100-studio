@@ -21,12 +21,19 @@ export interface Scene {
   duration?: number;
   caption?: string;
   motion?: ImageMotion;
+  music_volume?: number;
   prompt: string;
   full_prompt?: string;
   prompt_history: PromptRevision[];
   candidates: ImageCandidate[];
   selected_candidate_id?: string;
   status: CandidateStatus;
+}
+
+export interface BackgroundMusic {
+  name: string;
+  mime_type: string;
+  path: string;
 }
 
 export interface CharacterProfile {
@@ -63,6 +70,7 @@ export interface ProjectData {
   scenes: Scene[];
   thumbnail: VisualAsset;
   ending_message: string;
+  background_music?: BackgroundMusic;
   created_at: string;
   updated_at: string;
 }

@@ -11,6 +11,7 @@ import {
   FolderOpen,
   Image as ImageIcon,
   LoaderCircle,
+  Music2,
   KeyRound,
   Plus,
   RefreshCw,
@@ -22,8 +23,8 @@ import {
 } from "lucide-react";
 import { createProjectDraft, DEFAULT_STYLE, parseWorkText } from "./parser";
 import { composeScenePrompt, composeThumbnailPrompt } from "./prompts";
-import { createProjectOnDisk, deleteProject, downloadBlob, exportProjectZip, generateImages, getAccessCode, getRenderedVideo, importImageCandidates, isTauri, listProjects, saveProject, saveRenderedVideo, setAccessCode } from "./platform";
-import { buildVideoPlan, renderProjectMp4 } from "./video";
+import { createProjectOnDisk, deleteProject, downloadBlob, exportProjectZip, generateImages, getAccessCode, getBackgroundMusic, getRenderedVideo, importImageCandidates, isTauri, listProjects, removeBackgroundMusic, saveBackgroundMusic, saveProject, saveRenderedVideo, setAccessCode } from "./platform";
+import { buildVideoPlan, renderProjectMp4, sceneMusicVolume } from "./video";
 import { SAMPLE_WORK_TEXT } from "./sample";
 import type { ImageCandidate, ImageMotion, ProjectData, Scene, VisualAsset } from "./types";
 
@@ -151,7 +152,7 @@ function App() {
           )}
           {step === 2 && project && <ParseReview project={project} onChange={persist} onReparse={reparseSource} />}
           {step === 3 && project && <AssetStudio title="인물 기준 이미지" eyebrow="CHARACTER ANCHOR" description="모든 장면에서 같은 얼굴과 복식을 유지할 기준 이미지를 고르세요." asset={project.anchor} project={project} kind="anchor" onChange={(anchor) => persist({ ...project, anchor })} />}
-          {step === 4 && project && <SceneStudio project={project} onChange={updateScene} />}
+          {step === 4 && project && <SceneStudio project={project} onChange={updateScene} onProjectChange={persist} />}
           {step === 5 && project && <AssetStudio title="썸네일 만들기" eyebrow="THUMBNAIL" description="영상의 첫인상을 결정할 대표 이미지를 선택하세요. 썸네일은 ZIP에 보관되며 영상 본편에는 들어가지 않습니다." asset={project.thumbnail} project={project} kind="thumbnail" onChange={(thumbnail) => persist({ ...project, thumbnail })} />}
           {step === 6 && project && <Complete project={project} onDownload={() => download(project)} />}
         </section>
@@ -173,7 +174,7 @@ function Dashboard({ onStart, projects, accessCode, onAccessCode, onOpen, onDown
     <div className="hero-copy">
       <div className="eyebrow">GREAT STORIES, BEAUTIFULLY MADE</div>
       <h1>한 사람의 이야기를<br /><em>한 편의 그림책처럼.</em></h1>
-      <p>Work 제작안을 붙여넣으면 장면 이미지와 자막을 준비하고<br />무음 MP4까지 한 흐름에서 만들 수 있어요.</p>
+      <p>Work 제작안을 붙여넣으면 장면 이미지와 자막을 준비하고<br />배경음악을 더한 MP4까지 한 흐름에서 만들 수 있어요.</p>
       <button className="btn primary large" onClick={onStart}><Plus size={19} /> 새 인물 프로젝트</button>
     </div>
     <div className="hero-art" aria-label="Great100 Studio illustration">
@@ -276,7 +277,47 @@ function AssetStudio({ title, eyebrow, description, asset, project, kind, onChan
   </div>;
 }
 
-function SceneStudio({ project, onChange }: { project: ProjectData; onChange: (scene: Scene) => void }) {
+function BackgroundMusicPanel({ project, onChange }: { project: ProjectData; onChange: (project: ProjectData) => Promise<void> }) {
+  const input = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [previewUrl, setPreviewUrl] = useState("");
+  const [revision, setRevision] = useState(0);
+  useEffect(() => {
+    let active = true;
+    let url = "";
+    if (project.background_music) {
+      getBackgroundMusic(project).then((blob) => {
+        if (!blob) throw new Error("음악 파일을 찾지 못했습니다. 다시 업로드해 주세요.");
+        url = URL.createObjectURL(blob);
+        if (active) setPreviewUrl(url);
+        else URL.revokeObjectURL(url);
+      }).catch((cause) => { if (active) setError(String(cause)); });
+    } else setPreviewUrl("");
+    return () => { active = false; if (url) URL.revokeObjectURL(url); };
+  }, [project.id, project.background_music?.path, revision]);
+  const upload = async (file: File) => {
+    setBusy(true);
+    setError("");
+    try {
+      const background_music = await saveBackgroundMusic(project, file);
+      await onChange({ ...project, background_music });
+      setRevision((value) => value + 1);
+    } catch (cause) { setError(String(cause)); }
+    finally { setBusy(false); }
+  };
+  const remove = async () => {
+    if (!window.confirm("이 프로젝트의 배경음악을 제거할까요? 새로 만드는 MP4는 무음으로 저장됩니다.")) return;
+    setBusy(true);
+    setError("");
+    try { await removeBackgroundMusic(project); await onChange({ ...project, background_music: undefined }); }
+    catch (cause) { setError(String(cause)); }
+    finally { setBusy(false); }
+  };
+  return <div className="panel background-music-panel"><div className="music-head"><Music2 size={20} /><div><strong>영상 배경음악</strong><small>음악 한 곡이 영상 전체에 반복됩니다. 장면마다 아래에서 볼륨을 조절하세요.</small></div><input ref={input} className="file-input" type="file" accept=".mp3,.wav,.m4a,audio/mpeg,audio/wav,audio/mp4" aria-label="배경음악 파일 선택" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void upload(file); }} /><button className="btn ghost" disabled={busy} onClick={() => input.current?.click()}>{busy ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />}{project.background_music ? "음악 교체" : "음악 업로드"}</button></div>{project.background_music && <div className="music-file"><span>{project.background_music.name}</span>{previewUrl && <audio controls preload="metadata" src={previewUrl} aria-label="배경음악 미리듣기" />}<button className="btn ghost" disabled={busy} onClick={remove}><Trash2 size={15} /> 제거</button></div>}<small className="music-hint">MP3·WAV·M4A, 20MB·10분 이하 · 사용 권한이 있는 음악을 선택해 주세요.</small>{error && <div className="error-banner">{error}</div>}</div>;
+}
+
+function SceneStudio({ project, onChange, onProjectChange }: { project: ProjectData; onChange: (scene: Scene) => void; onProjectChange: (project: ProjectData) => Promise<void> }) {
   const [active, setActive] = useState(project.scenes[0]?.id || "");
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
@@ -309,11 +350,13 @@ function SceneStudio({ project, onChange }: { project: ProjectData; onChange: (s
   };
   return <div className="page scene-page">
     <PageHeading eyebrow="SCENE REVIEW" title="장면을 만들고 고르세요" text="프롬프트를 다듬고 각 장면의 최종 이미지를 하나씩 선택합니다." />
+    <BackgroundMusicPanel project={project} onChange={onProjectChange} />
     <div className="scene-tabs">{project.scenes.map((item) => <button key={item.id} className={item.id === scene.id ? "active" : ""} onClick={() => { setActive(item.id); setCopied(false); }}><span>{item.selected_candidate_id ? <Check size={13} /> : item.number}</span>{item.title}</button>)}</div>
     <div className="scene-title"><div><span>SCENE {String(scene.number).padStart(2, "0")}</span><h3>{scene.title}</h3></div></div>
     <PromptEditor heading="장면 내용 (수정 가능)" value={scene.prompt} historyCount={scene.prompt_history.length} onChange={(prompt) => { setCopied(false); onChange({ ...scene, prompt }); }} onGenerate={generate} onUpload={upload} generating={scene.status === "generating"} uploading={uploading} />
     <div className="panel full-prompt-panel"><div className="full-prompt-head"><div><strong>복사용 전체 이미지 프롬프트</strong><small>장면 내용 + 인물 외형 기준 + 공통 스타일이 항상 함께 들어갑니다.</small></div><button className="btn ghost" disabled={!scene.prompt.trim()} onClick={copyFullPrompt}>{copied ? <Check size={16} /> : <Copy size={16} />}{copied ? "복사됨" : "전체 프롬프트 복사"}</button></div><textarea aria-label="복사용 전체 이미지 프롬프트" readOnly value={fullPrompt} /></div>
     <div className="panel caption-panel"><label><strong>영상 자막</strong><small>이 문장이 장면 이미지 위에 표시됩니다.</small><textarea aria-label="영상 자막" value={scene.caption ?? scene.title} onChange={(event) => onChange({ ...scene, caption: event.target.value })} /></label><label className="duration-label"><strong>표시 시간 (초)</strong><input aria-label="장면 표시 시간" type="number" min="1" max="120" step="1" value={scene.duration ?? 10} onChange={(event) => onChange({ ...scene, duration: Number(event.target.value) })} /></label><label className="motion-label"><strong>이미지 효과</strong><small>MP4에 적용됩니다.</small><select aria-label="이미지 효과" value={scene.motion ?? "auto"} onChange={(event) => onChange({ ...scene, motion: event.target.value as ImageMotion })}><option value="auto">자동 (장면마다 다르게)</option><option value="zoom-in">천천히 줌인</option><option value="zoom-out">천천히 줌아웃</option><option value="pan-left">왼쪽으로 이동</option><option value="pan-right">오른쪽으로 이동</option><option value="pan-up">위로 이동</option><option value="pan-down">아래로 이동</option><option value="none">효과 없음</option></select></label></div>
+    <div className="panel music-volume-panel"><label><strong>이 장면의 배경음악 볼륨</strong><small>{project.background_music ? "장면이 바뀔 때 볼륨도 부드럽게 바뀝니다." : "음악을 추가하면 이 설정이 적용됩니다."}</small><input aria-label="장면 배경음악 볼륨" type="range" min="0" max="100" step="1" value={sceneMusicVolume(scene.music_volume)} onChange={(event) => onChange({ ...scene, music_volume: Number(event.target.value) })} /></label><output>{sceneMusicVolume(scene.music_volume)}%</output></div>
     {error && <div className="error-banner">{error}</div>}
     <CandidateGrid candidates={scene.candidates} selected={scene.selected_candidate_id} onSelect={(id) => onChange({ ...scene, selected_candidate_id: id })} emptyLabel="이 장면의 이미지를 업로드하거나 생성해 보세요" />
   </div>;
@@ -362,7 +405,20 @@ function Complete({ project, onDownload }: { project: ProjectData; onDownload: (
   };
   let duration = 0;
   try { duration = buildVideoPlan(project).reduce((sum, segment) => sum + segment.duration, 0); } catch { /* Image selection is shown below. */ }
-  return <div className="complete-page"><div className="complete-mark"><Check size={42} /></div><div className="eyebrow">VIDEO EXPORT</div><h2>{project.person} 편 영상 만들기</h2><p>선택한 장면 이미지에 줌·이동 효과와 자막을 입힌 무음 MP4를 만듭니다. 음성·배경음악은 포함되지 않습니다.</p><div className="summary-cards"><div><span>회차</span><strong>{String(project.episode).padStart(3, "0")}</strong></div><div><span>선택 장면</span><strong>{sceneDone}/{project.scenes.length}</strong></div><div><span>영상 길이</span><strong>{duration ? `${duration}초` : "이미지 확인"}</strong></div></div><div className="folder-tree"><FolderOpen size={22} /><div><strong>{project.project_path}</strong><small>완성 MP4: 05_exports/{project.folder_name}.mp4 · 1280×720 · 무음</small></div></div><div className="video-actions"><button className="btn primary export-button" disabled={rendering} onClick={makeVideo}>{rendering ? <LoaderCircle className="spin" size={17} /> : <Download size={17} />}{rendering ? `MP4 만드는 중… ${percent}%` : video ? "MP4 다시 만들기" : "무음 MP4 만들기"}</button>{video && <><button className="btn ghost export-button" onClick={() => downloadBlob(video, `${project.folder_name}.mp4`)}><Download size={17} /> MP4 다시 다운로드</button>{!isTauri() && <button className="btn ghost export-button" onClick={onDownload}><Download size={17} /> MP4 포함 ZIP 다운로드</button>}</>}</div>{rendering && <div className="render-progress"><i style={{ width: `${percent}%` }} /></div>}{error && <div className="error-banner">{error}</div>}{video && <p className="video-ready"><CheckCircle2 size={17} /> MP4가 완성되었습니다. 자막·이미지·효과를 수정하면 다시 만들어 주세요.</p>}{previewUrl && <video className="video-preview" aria-label="완성 MP4 미리보기" src={previewUrl} controls playsInline /> }<div className="ending"><span>엔딩 메시지</span><p>“{project.ending_message || "아직 엔딩 메시지가 없습니다."}”</p></div></div>;
+  return <div className="complete-page">
+    <div className="complete-mark"><Check size={42} /></div>
+    <div className="eyebrow">VIDEO EXPORT</div>
+    <h2>{project.person} 편 영상 만들기</h2>
+    <p>선택한 장면 이미지에 줌·이동 효과와 자막{project.background_music ? "·배경음악" : ""}을 넣어 MP4를 만듭니다. 내레이션 음성은 포함되지 않습니다.</p>
+    <div className="summary-cards"><div><span>회차</span><strong>{String(project.episode).padStart(3, "0")}</strong></div><div><span>선택 장면</span><strong>{sceneDone}/{project.scenes.length}</strong></div><div><span>영상 길이</span><strong>{duration ? `${duration}초` : "이미지 확인"}</strong></div></div>
+    <div className="folder-tree"><FolderOpen size={22} /><div><strong>{project.project_path}</strong><small>완성 MP4: 05_exports/{project.folder_name}.mp4 · 1280×720 · {project.background_music ? "배경음악 포함" : "무음"}</small></div></div>
+    <div className="video-actions"><button className="btn primary export-button" disabled={rendering} onClick={makeVideo}>{rendering ? <LoaderCircle className="spin" size={17} /> : <Download size={17} />}{rendering ? `MP4 만드는 중… ${percent}%` : video ? "MP4 다시 만들기" : "MP4 만들기"}</button>{video && <><button className="btn ghost export-button" onClick={() => downloadBlob(video, `${project.folder_name}.mp4`)}><Download size={17} /> MP4 다시 다운로드</button>{!isTauri() && <button className="btn ghost export-button" onClick={onDownload}><Download size={17} /> MP4 포함 ZIP 다운로드</button>}</>}</div>
+    {rendering && <div className="render-progress"><i style={{ width: `${percent}%` }} /></div>}
+    {error && <div className="error-banner">{error}</div>}
+    {video && <p className="video-ready"><CheckCircle2 size={17} /> MP4가 완성되었습니다. 자막·이미지·효과·음악을 수정하면 다시 만들어 주세요.</p>}
+    {previewUrl && <video className="video-preview" aria-label="완성 MP4 미리보기" src={previewUrl} controls playsInline />}
+    <div className="ending"><span>엔딩 메시지</span><p>“{project.ending_message || "아직 엔딩 메시지가 없습니다."}”</p></div>
+  </div>;
 }
 
 function appendHistory(history: { prompt: string; created_at: string }[], prompt: string) {

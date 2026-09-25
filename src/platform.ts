@@ -2,14 +2,15 @@ import { invoke } from "@tauri-apps/api/core";
 import { openDB } from "idb";
 import JSZip from "jszip";
 import { composeScenePrompt, composeThumbnailPrompt, withFullImagePrompts } from "./prompts";
-import type { GenerateRequest, ImageCandidate, ProjectData, VisualAsset } from "./types";
+import type { BackgroundMusic, GenerateRequest, ImageCandidate, ProjectData, VisualAsset } from "./types";
 
 export const isTauri = () => "__TAURI_INTERNALS__" in window;
 
-const database = () => openDB("great100-studio", 2, {
+const database = () => openDB("great100-studio", 3, {
   upgrade(db) {
     if (!db.objectStoreNames.contains("projects")) db.createObjectStore("projects", { keyPath: "id" });
     if (!db.objectStoreNames.contains("videos")) db.createObjectStore("videos", { keyPath: "id" });
+    if (!db.objectStoreNames.contains("audio")) db.createObjectStore("audio", { keyPath: "id" });
   },
 });
 
@@ -57,9 +58,70 @@ export async function deleteProject(project: ProjectData): Promise<string | unde
   if (!saved || saved.project_path !== project.project_path || saved.folder_name !== project.folder_name) {
     throw new Error("삭제할 프로젝트가 저장된 내용과 일치하지 않습니다. 목록을 새로고침해 주세요.");
   }
-  const tx = db.transaction(["projects", "videos"], "readwrite");
-  await Promise.all([tx.objectStore("projects").delete(project.id), tx.objectStore("videos").delete(project.id)]);
+  const tx = db.transaction(["projects", "videos", "audio"], "readwrite");
+  await Promise.all([tx.objectStore("projects").delete(project.id), tx.objectStore("videos").delete(project.id), tx.objectStore("audio").delete(project.id)]);
   await tx.done;
+}
+
+const MUSIC_FORMATS: Record<string, { extension: string; mime: string }> = {
+  mp3: { extension: "mp3", mime: "audio/mpeg" },
+  wav: { extension: "wav", mime: "audio/wav" },
+  m4a: { extension: "m4a", mime: "audio/mp4" },
+};
+
+export function detectMusicFormat(file: Pick<File, "name" | "type" | "size">): { extension: string; mime: string } {
+  if (!file.size || file.size > 20_000_000) throw new Error("배경음악은 20MB 이하 파일만 사용할 수 있습니다.");
+  const extension = file.name.split(".").at(-1)?.toLowerCase() || "";
+  const format = MUSIC_FORMATS[extension];
+  if (!format) throw new Error("MP3, WAV, M4A 배경음악만 사용할 수 있습니다.");
+  if (file.type && ![format.mime, ...(extension === "wav" ? ["audio/x-wav", "audio/wave"] : extension === "m4a" ? ["audio/x-m4a", "audio/aac"] : ["audio/mp3"])].includes(file.type)) {
+    throw new Error("파일 확장자와 오디오 형식이 맞지 않습니다.");
+  }
+  return format;
+}
+
+export async function saveBackgroundMusic(project: ProjectData, file: File): Promise<BackgroundMusic> {
+  const format = detectMusicFormat(file);
+  const data = await file.arrayBuffer();
+  const audioContext = new AudioContext();
+  let duration = 0;
+  try { duration = (await audioContext.decodeAudioData(data.slice(0))).duration; }
+  catch { throw new Error("음악 파일을 재생할 수 없습니다. 다른 MP3, WAV 또는 M4A 파일을 선택해 주세요."); }
+  finally { await audioContext.close(); }
+  if (!Number.isFinite(duration) || duration <= 0 || duration > 600) throw new Error("배경음악은 10분 이하 파일만 사용할 수 있습니다. 짧은 음악은 영상 길이만큼 반복됩니다.");
+  const music = { name: file.name, mime_type: format.mime, path: `${project.project_path}/01_source/background_music.${format.extension}` };
+  if (isTauri()) {
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(new Error("음악 파일을 읽지 못했습니다."));
+      reader.readAsDataURL(file);
+    });
+    await invoke("save_background_music", { projectPath: project.project_path, mimeType: format.mime, dataUrl: `data:${format.mime};base64,${dataUrl.slice(dataUrl.indexOf(",") + 1)}` });
+  } else {
+    const db = await database();
+    await db.put("audio", { id: project.id, blob: new Blob([data], { type: format.mime }) });
+  }
+  return music;
+}
+
+export async function getBackgroundMusic(project: ProjectData): Promise<Blob | null> {
+  if (!project.background_music) return null;
+  if (isTauri()) {
+    const encoded = await invoke<string>("read_background_music", { projectPath: project.project_path, mimeType: project.background_music.mime_type });
+    return await (await fetch(`data:${project.background_music.mime_type};base64,${encoded}`)).blob();
+  }
+  const db = await database();
+  const saved = await db.get("audio", project.id) as { blob: Blob } | undefined;
+  return saved?.blob || null;
+}
+
+export async function removeBackgroundMusic(project: ProjectData): Promise<void> {
+  if (isTauri()) await invoke("remove_background_music", { projectPath: project.project_path });
+  else {
+    const db = await database();
+    await db.delete("audio", project.id);
+  }
 }
 
 export async function generateImages(request: GenerateRequest): Promise<ImageCandidate[]> {
@@ -176,6 +238,11 @@ export async function buildProjectZip(project: ProjectData, video?: Blob): Promi
   const root = zip.folder(project.folder_name)!;
   for (const folder of ["01_source", "02_character", "03_images", "04_thumbnail", "05_exports", "06_logs"]) root.folder(folder);
   root.file("01_source/work_result.txt", project.source_text);
+  if (project.background_music) {
+    const music = await getBackgroundMusic(project);
+    if (!music) throw new Error("배경음악 파일을 찾지 못했습니다. 다시 업로드해 주세요.");
+    root.file(`01_source/background_music.${project.background_music.path.split(".").at(-1)}`, music);
+  }
   const withoutPreviews = structuredClone(withFullImagePrompts(project));
   for (const asset of [withoutPreviews.anchor, withoutPreviews.thumbnail, ...withoutPreviews.scenes]) {
     asset.candidates = asset.candidates.map(({ preview_url: _preview, ...candidate }) => ({ ...candidate, preview_url: "" }));

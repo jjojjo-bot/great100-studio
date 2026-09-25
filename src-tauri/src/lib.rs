@@ -268,6 +268,87 @@ fn save_video(project_path: String, data_url: String) -> Result<String, String> 
     Ok(path.to_string_lossy().into_owned())
 }
 
+fn music_extension(mime_type: &str) -> Result<&'static str, String> {
+    match mime_type {
+        "audio/mpeg" => Ok("mp3"),
+        "audio/wav" => Ok("wav"),
+        "audio/mp4" => Ok("m4a"),
+        _ => Err("MP3, WAV, M4A 배경음악만 사용할 수 있습니다.".into()),
+    }
+}
+
+fn music_dir(project_path: &str) -> Result<PathBuf, String> {
+    let project_dir = safe_project_path(project_path)?;
+    if !project_dir.join("project_data.json").is_file() {
+        return Err("프로젝트를 찾지 못했습니다.".into());
+    }
+    let dir = project_dir.join("01_source");
+    let metadata = fs::symlink_metadata(&dir).map_err(|error| error.to_string())?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err("배경음악 폴더가 올바르지 않습니다.".into());
+    }
+    Ok(dir)
+}
+
+fn checked_music_path(dir: &Path, extension: &str) -> Result<PathBuf, String> {
+    let path = dir.join(format!("background_music.{extension}"));
+    if let Ok(metadata) = fs::symlink_metadata(&path) {
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err("배경음악 파일 경로가 올바르지 않습니다.".into());
+        }
+    }
+    Ok(path)
+}
+
+#[tauri::command]
+fn save_background_music(project_path: String, mime_type: String, data_url: String) -> Result<String, String> {
+    let extension = music_extension(&mime_type)?;
+    let dir = music_dir(&project_path)?;
+    let (_, encoded) = data_url.split_once(',').ok_or("음악 데이터 형식이 올바르지 않습니다.")?;
+    if !data_url.starts_with("data:audio/") || encoded.len() > 27_000_000 {
+        return Err("20MB 이하 오디오 파일만 사용할 수 있습니다.".into());
+    }
+    let bytes = STANDARD.decode(encoded).map_err(|error| error.to_string())?;
+    if bytes.is_empty() || bytes.len() > 20_000_000 {
+        return Err("20MB 이하 오디오 파일만 사용할 수 있습니다.".into());
+    }
+    let valid = match extension {
+        "mp3" => bytes.starts_with(b"ID3") || (bytes.len() > 1 && bytes[0] == 0xff && bytes[1] & 0xe0 == 0xe0),
+        "wav" => bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(&b"WAVE"[..]),
+        "m4a" => bytes.get(4..8) == Some(&b"ftyp"[..]),
+        _ => false,
+    };
+    if !valid { return Err("음악 파일 내용이 올바르지 않습니다.".into()); }
+    let path = checked_music_path(&dir, extension)?;
+    fs::write(&path, bytes).map_err(|error| error.to_string())?;
+    for old_extension in ["mp3", "wav", "m4a"] {
+        if old_extension != extension {
+            let old = checked_music_path(&dir, old_extension)?;
+            if old.is_file() { fs::remove_file(old).map_err(|error| error.to_string())?; }
+        }
+    }
+    Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn read_background_music(project_path: String, mime_type: String) -> Result<String, String> {
+    let extension = music_extension(&mime_type)?;
+    let path = checked_music_path(&music_dir(&project_path)?, extension)?;
+    let bytes = fs::read(path).map_err(|error| error.to_string())?;
+    if bytes.len() > 20_000_000 { return Err("배경음악 파일이 너무 큽니다.".into()); }
+    Ok(STANDARD.encode(bytes))
+}
+
+#[tauri::command]
+fn remove_background_music(project_path: String) -> Result<(), String> {
+    let dir = music_dir(&project_path)?;
+    for extension in ["mp3", "wav", "m4a"] {
+        let path = checked_music_path(&dir, extension)?;
+        if path.is_file() { fs::remove_file(path).map_err(|error| error.to_string())?; }
+    }
+    Ok(())
+}
+
 async fn generate_openai(
     api_key: &str,
     request: &GenerateRequest,
@@ -419,7 +500,10 @@ pub fn run() {
             delete_project,
             generate_images,
             import_image,
-            save_video
+            save_video,
+            save_background_music,
+            read_background_music,
+            remove_background_music
         ])
         .run(tauri::generate_context!())
         .expect("error while running Great100 Studio");

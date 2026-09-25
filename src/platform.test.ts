@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import "fake-indexeddb/auto";
 import JSZip from "jszip";
 import { createProjectDraft } from "./parser";
-import { buildProjectZip, createProjectOnDisk, deleteProject, detectImageFormat, getRenderedVideo, importImageCandidates, listProjects, saveProject, saveRenderedVideo } from "./platform";
+import { buildProjectZip, createProjectOnDisk, deleteProject, detectImageFormat, detectMusicFormat, getBackgroundMusic, getRenderedVideo, importImageCandidates, listProjects, removeBackgroundMusic, saveBackgroundMusic, saveProject, saveRenderedVideo } from "./platform";
 import { SAMPLE_WORK_TEXT } from "./sample";
 
 describe("project export", () => {
@@ -76,6 +76,33 @@ describe("uploaded image validation", () => {
     expect(candidate.mode).toBe("uploaded");
     expect(candidate.path).toMatch(/^projects\/002_이순신\/02_character\/candidate_.+\.png$/);
     expect(candidate.preview_url).toBe("data:image/png;base64,iVBORw0KGgo=");
+  });
+});
+
+describe("background music storage", () => {
+  it("accepts common audio formats and rejects oversized files", () => {
+    expect(detectMusicFormat({ name: "music.mp3", type: "audio/mpeg", size: 100 }).extension).toBe("mp3");
+    expect(detectMusicFormat({ name: "music.wav", type: "audio/x-wav", size: 100 }).extension).toBe("wav");
+    expect(detectMusicFormat({ name: "music.m4a", type: "audio/mp4", size: 100 }).extension).toBe("m4a");
+    expect(() => detectMusicFormat({ name: "music.mp3", type: "audio/mpeg", size: 20_000_001 })).toThrow("20MB");
+  });
+
+  it("stores the uploaded file separately, includes it in ZIP, and removes it cleanly", async () => {
+    vi.stubGlobal("window", {});
+    vi.stubGlobal("AudioContext", class {
+      decodeAudioData = async () => ({ length: 1, duration: 1 });
+      close = async () => {};
+    });
+    const project = createProjectDraft(24, "음악 시험", "장군 · 지도자", SAMPLE_WORK_TEXT);
+    project.project_path = await createProjectOnDisk(project);
+    const file = new File([new Uint8Array([73, 68, 51, 1])], "theme.mp3", { type: "audio/mpeg" });
+    project.background_music = await saveBackgroundMusic(project, file);
+    await saveProject(project);
+    expect((await getBackgroundMusic(project))?.size).toBe(file.size);
+    const zip = await JSZip.loadAsync(await (await buildProjectZip(project)).arrayBuffer());
+    expect(zip.file(`${project.folder_name}/01_source/background_music.mp3`)).not.toBeNull();
+    await removeBackgroundMusic(project);
+    expect(await getBackgroundMusic(project)).toBeNull();
   });
 });
 
