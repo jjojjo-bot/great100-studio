@@ -82,6 +82,19 @@ function App() {
     await persist({ ...project, scenes: project.scenes.map((item) => (item.id === scene.id ? scene : item)) });
   };
 
+  const reparseSource = async () => {
+    if (!project) return;
+    const parsed = parseWorkText(project.source_text);
+    const anchorPrompt = `${parsed.character_profile.description || `${parsed.person}, 역사적 복식, 차분하고 믿음직한 표정`}. 전신 또는 반신 인물 기준 시트, 정면, 단순한 배경, 동일 인물 유지용.`;
+    const anchor = project.anchor.candidates.length ? project.anchor : {
+      ...project.anchor,
+      prompt: anchorPrompt,
+      prompt_history: appendHistory(project.anchor.prompt_history, anchorPrompt),
+    };
+    await persist({ ...project, ...parsed, anchor });
+    setNotice(`${parsed.scenes.length}개 장면을 다시 찾았습니다.`);
+  };
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -116,7 +129,7 @@ function App() {
               setEpisode={setEpisode} setPerson={setPerson} setCategory={setCategory} setSource={setSource}
               onSample={() => { setSource(SAMPLE_WORK_TEXT); setPerson("이순신"); setEpisode(2); }} onContinue={prepareProject} />
           )}
-          {step === 2 && project && <ParseReview project={project} onChange={persist} onReparse={() => persist({ ...project, ...parseWorkText(project.source_text) })} />}
+          {step === 2 && project && <ParseReview project={project} onChange={persist} onReparse={reparseSource} />}
           {step === 3 && project && <AssetStudio title="인물 기준 이미지" eyebrow="CHARACTER ANCHOR" description="모든 장면에서 같은 얼굴과 복식을 유지할 기준 이미지를 고르세요." asset={project.anchor} project={project} kind="anchor" onChange={(anchor) => persist({ ...project, anchor })} />}
           {step === 4 && project && <SceneStudio project={project} onChange={updateScene} />}
           {step === 5 && project && <AssetStudio title="썸네일 만들기" eyebrow="THUMBNAIL" description="영상의 첫인상을 결정할 대표 이미지를 선택하세요. 썸네일은 ZIP에 보관되며 영상 본편에는 들어가지 않습니다." asset={project.thumbnail} project={project} kind="thumbnail" onChange={(thumbnail) => persist({ ...project, thumbnail })} />}

@@ -39,10 +39,24 @@ function wrapCaption(ctx: CanvasRenderingContext2D, caption: string, maxWidth: n
     }
     if (line) lines.push(line);
   }
-  return lines.slice(0, 4);
+  return lines;
 }
 
-function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null, segment: VideoSegment, progress: number, person: string) {
+export function captionParts(caption: string): string[] {
+  const words = caption.trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return [""];
+  const parts: string[] = [];
+  let part = "";
+  for (const word of words) {
+    const next = part ? `${part} ${word}` : word;
+    if (part && next.length > 62) { parts.push(part); part = word; }
+    else part = next;
+  }
+  if (part) parts.push(part);
+  return parts;
+}
+
+function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null, caption: string, progress: number, person: string) {
   const { width, height } = ctx.canvas;
   ctx.fillStyle = "#172b29";
   ctx.fillRect(0, 0, width, height);
@@ -64,9 +78,9 @@ function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null
     ctx.fillText(person, width / 2, height / 2 - 50);
   }
 
-  if (!segment.caption.trim()) return;
+  if (!caption.trim()) return;
   ctx.font = "bold 43px sans-serif";
-  const lines = wrapCaption(ctx, segment.caption, width - 130);
+  const lines = wrapCaption(ctx, caption, width - 130);
   if (!lines.length) return;
   const lineHeight = 58;
   const bandHeight = Math.max(120, lines.length * lineHeight + 52);
@@ -101,6 +115,7 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
   output.addVideoTrack(source);
   await output.start();
   const frameCounts = plan.map((segment) => Math.max(1, Math.round(segment.duration * VIDEO_FPS)));
+  const captions = plan.map((segment) => captionParts(segment.caption));
   const totalFrames = frameCounts.reduce((sum, count) => sum + count, 0);
   let frame = 0;
   for (let segmentIndex = 0; segmentIndex < plan.length; segmentIndex++) {
@@ -111,7 +126,9 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
       catch { throw new Error(`${segment.title} 이미지를 읽지 못했습니다. 다시 업로드하거나 생성해 주세요.`); }
     }
     for (let localFrame = 0; localFrame < frameCounts[segmentIndex]; localFrame++) {
-      drawFrame(ctx, image, segment, localFrame / frameCounts[segmentIndex], project.person);
+      const progress = localFrame / frameCounts[segmentIndex];
+      const part = captions[segmentIndex][Math.min(captions[segmentIndex].length - 1, Math.floor(progress * captions[segmentIndex].length))];
+      drawFrame(ctx, image, part, progress, project.person);
       await source.add(frame / VIDEO_FPS, 1 / VIDEO_FPS);
       frame++;
       if (frame % 15 === 0 || frame === totalFrames) {
