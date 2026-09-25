@@ -28,7 +28,7 @@ describe("APP_DATA v2", () => {
     const result = parseAppData(`# 자유형 본문\n어떤 Scene 텍스트\n\n## APP_DATA\n\n\`\`\`json\n${JSON.stringify(data)}\n\`\`\``);
     expect(result.data).toEqual(data);
     expect(result.report.errors).toEqual([]);
-    expect(result.report.warnings).toEqual([]);
+    expect(result.report.warnings).toContain("Legacy project — captions missing. v2.1 데이터 재생성을 권장합니다.");
   });
 
   it("does not guess missing fields or missing scene IDs", () => {
@@ -59,11 +59,39 @@ describe("APP_DATA v2", () => {
     project.scenes[0].prompt = "앱에서 수정한 프롬프트";
     expect(project.source?.scenes[0].image_prompt).toBe("장면 1의 이미지");
     expect(reportForProject(project).errors).toEqual([]);
-    expect(completionErrors(project)).toHaveLength(16);
+    expect(completionErrors(project)).toHaveLength(17);
     const candidate: ImageCandidate = { id: "choice", path: "mock", preview_url: "data:image/svg+xml;base64,AA==", created_at: "now", mode: "mock" };
     project.scenes.forEach((scene) => { scene.candidates = [candidate]; scene.selected_candidate_id = "choice"; });
     project.thumbnail.candidates = [candidate]; project.thumbnail.selected_candidate_id = "choice";
-    expect(completionErrors(project)).toEqual([]);
+    expect(completionErrors(project)).toContain("Legacy project — captions missing. v2.1 데이터로 새 프로젝트를 만들어 주세요.");
     expect(buildVideoPlan(project).reduce((sum, item) => sum + item.duration, 0)).toBe(289);
+  });
+
+  it("accepts pure v2.1 JSON, separates emphasis subtitle from narration captions, and checks their timing", () => {
+    const data = fixture();
+    data.schema_version = "2.1";
+    data.scenes.forEach((scene) => { scene.narration = `세종이 새 글자를 생각했습니다 ${scene.order}`; scene.subtitle = `생각 ${scene.order}`; scene.captions = [{ text: scene.narration, start_sec: scene.start_sec, end_sec: scene.end_sec }]; });
+    const { data: parsed, report } = parseAppData(JSON.stringify(data));
+    expect(report.errors).toEqual([]);
+    expect(report.warnings).toEqual([]);
+    const project = createV2ProjectDraft(1, "사상 · 교육", JSON.stringify(data), parsed, report);
+    expect(project.schema_version).toBe("2.1");
+    expect(project.scenes[0].subtitle).toBe("생각 1");
+    expect(project.scenes[0].captions?.[0].text).toBe("세종이 새 글자를 생각했습니다 1");
+    expect(project.source?.scenes[0].captions?.[0].text).toBe("세종이 새 글자를 생각했습니다 1");
+    data.scenes[2].captions![0].end_sec = data.scenes[2].end_sec + 1;
+    expect(validateAppData(data).errors).toContain("scene_03 Caption 1 시간이 Scene 범위를 벗어났습니다.");
+    data.scenes[2].captions![0].end_sec = data.scenes[2].end_sec;
+    data.scenes[2].captions![0].text = "일부만";
+    expect(validateAppData(data).errors).toContain("scene_03의 captions가 narration 내용을 충분히 포함하지 않습니다.");
+  });
+
+  it("warns on long caption blocks and rejects missing scene IDs", () => {
+    const data = fixture();
+    data.schema_version = "2.1";
+    data.scenes.forEach((scene) => { scene.narration = "세종은 백성 모두가 편하게 쓸 수 있는 새 글자를 만들기 위해 오랫동안 여러 생각을 모았습니다"; scene.captions = [{ text: scene.narration, start_sec: scene.start_sec, end_sec: scene.end_sec }]; });
+    expect(validateAppData(data).warnings).toContain("Scene 01 Caption 1가 3줄 이상으로 표시될 수 있습니다.");
+    data.scenes[6].id = "scene_08";
+    expect(validateAppData(data).errors).toContain("scene_07이 누락되었거나 순서가 잘못되었습니다.");
   });
 });

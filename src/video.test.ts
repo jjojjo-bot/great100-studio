@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createProjectDraft } from "./parser";
 import { SAMPLE_WORK_TEXT } from "./sample";
-import { buildVideoPlan, captionParts, imagePlacement, musicGainAtTime, resolveImageMotion, sceneMusicVolume } from "./video";
+import { activeTimedCaption, buildVideoPlan, captionParts, imagePlacement, musicGainAtTime, resolveImageMotion, sceneMusicVolume } from "./video";
 
 describe("MP4 제작 계획", () => {
   it("requires a selected image for every scene", () => {
@@ -30,6 +30,13 @@ describe("MP4 제작 계획", () => {
     expect(parts.length).toBeGreaterThan(1);
     expect(parts.join(" ")).toBe(original);
     expect(parts.every((part) => part.length <= 62)).toBe(true);
+  });
+
+  it("v2.1 caption block은 지정 시간에만 표시하고 임의로 다시 나누지 않는다", () => {
+    const blocks = [{ text: "첫 의미 단위", start_sec: 0, end_sec: 3 }, { text: "두 번째 의미 단위", start_sec: 3, end_sec: 6 }];
+    expect(activeTimedCaption(blocks, 1)).toBe("첫 의미 단위");
+    expect(activeTimedCaption(blocks, 3)).toBe("두 번째 의미 단위");
+    expect(activeTimedCaption(blocks, 6)).toBe("");
   });
 
   it("자동 효과는 장면마다 줌과 이동을 순환한다", () => {

@@ -1,5 +1,6 @@
 import { getBackgroundMusic } from "./platform";
-import type { ImageMotion, ProjectData } from "./types";
+import { reportForProject } from "./app-data";
+import type { CaptionBlock, ImageMotion, ProjectData } from "./types";
 
 export const VIDEO_WIDTH = 1280;
 export const VIDEO_HEIGHT = 720;
@@ -8,6 +9,8 @@ export const VIDEO_FPS = 15;
 export interface VideoSegment {
   title: string;
   caption: string;
+  timedCaptions?: CaptionBlock[];
+  emphasisSubtitle?: string;
   imageUrl?: string;
   duration: number;
   motion: Exclude<ImageMotion, "auto">;
@@ -27,12 +30,19 @@ export function sceneMusicVolume(volume: number | undefined): number {
 
 export function buildVideoPlan(project: ProjectData): VideoSegment[] {
   if (!project.scenes.length) throw new Error("영상으로 만들 Scene이 없습니다.");
+  if (project.schema_version === "2.1") {
+    const errors = reportForProject(project).errors;
+    if (errors.length) throw new Error(errors[0]);
+  }
   const scenes: VideoSegment[] = [...project.scenes].sort((a, b) => a.number - b.number).map((scene, index) => {
     const image = scene.candidates.find((candidate) => candidate.id === scene.selected_candidate_id);
     if (!image) throw new Error(`Scene ${String(scene.number).padStart(2, "0")}의 이미지를 선택해 주세요.`);
     const duration = scene.duration ?? 10;
     if (!Number.isFinite(duration) || duration < 1 || duration > 120) throw new Error(`Scene ${scene.number}의 길이는 1~120초여야 합니다.`);
-    return { title: scene.title, caption: scene.caption ?? scene.title, imageUrl: image.preview_url, duration, motion: resolveImageMotion(scene.motion, index), musicVolume: sceneMusicVolume(scene.music_volume) };
+    return { title: scene.title, caption: project.schema_version === "2.1" ? scene.narration || "" : scene.caption ?? scene.title,
+      timedCaptions: project.schema_version === "2.1" ? scene.captions?.map((block) => ({ ...block, start_sec: block.start_sec - (scene.start_sec || 0), end_sec: block.end_sec - (scene.start_sec || 0) })) : undefined,
+      emphasisSubtitle: project.schema_version === "2.1" ? scene.subtitle : undefined,
+      imageUrl: image.preview_url, duration, motion: resolveImageMotion(scene.motion, index), musicVolume: sceneMusicVolume(scene.music_volume) };
   });
   const total = scenes.reduce((sum, scene) => sum + scene.duration, 0) + (project.ending_message.trim() ? 4 : 0);
   if (total > 900) throw new Error("영상 길이는 15분 이하로 설정해 주세요.");
@@ -131,7 +141,11 @@ export function captionParts(caption: string): string[] {
   return parts;
 }
 
-function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null, caption: string, progress: number, person: string, motion: VideoSegment["motion"]) {
+export function activeTimedCaption(blocks: CaptionBlock[], seconds: number): string {
+  return blocks.find((block) => seconds >= block.start_sec && seconds < block.end_sec)?.text || "";
+}
+
+function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null, caption: string, progress: number, person: string, motion: VideoSegment["motion"], emphasis = "") {
   const { width, height } = ctx.canvas;
   ctx.fillStyle = "#172b29";
   ctx.fillRect(0, 0, width, height);
@@ -150,12 +164,27 @@ function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null
     ctx.fillText(person, width / 2, height / 2 - 50);
   }
 
+  if (emphasis.trim()) {
+    ctx.font = "bold 50px sans-serif";
+    ctx.fillStyle = "rgba(10, 24, 23, 0.75)";
+    ctx.fillRect(120, 96, width - 240, 88);
+    ctx.fillStyle = "#ffffff";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(emphasis, width / 2, 140, width - 280);
+  }
   if (!caption.trim()) return;
-  ctx.font = "bold 43px sans-serif";
-  const lines = wrapCaption(ctx, caption, width - 130);
+  let fontSize = 43;
+  let lines: string[] = [];
+  do {
+    ctx.font = `bold ${fontSize}px sans-serif`;
+    lines = wrapCaption(ctx, caption, width - 130);
+    if (lines.length <= 2 || fontSize <= 24) break;
+    fontSize -= 3;
+  } while (true);
   if (!lines.length) return;
-  const lineHeight = 58;
-  const bandHeight = Math.max(120, lines.length * lineHeight + 52);
+  const lineHeight = fontSize + 15;
+  const bandHeight = Math.max(110, lines.length * lineHeight + 44);
   ctx.fillStyle = "rgba(10, 24, 23, 0.79)";
   ctx.fillRect(0, height - bandHeight, width, bandHeight);
   ctx.textAlign = "center";
@@ -234,8 +263,9 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
       }
       for (let localFrame = 0; localFrame < frameCounts[segmentIndex]; localFrame++) {
         const progress = frameCounts[segmentIndex] === 1 ? 0 : localFrame / (frameCounts[segmentIndex] - 1);
-        const part = captions[segmentIndex][Math.min(captions[segmentIndex].length - 1, Math.floor(progress * captions[segmentIndex].length))];
-        drawFrame(ctx, image, part, progress, project.person, segment.motion);
+        const seconds = localFrame / VIDEO_FPS;
+        const part = segment.timedCaptions ? activeTimedCaption(segment.timedCaptions, seconds) : captions[segmentIndex][Math.min(captions[segmentIndex].length - 1, Math.floor(progress * captions[segmentIndex].length))];
+        drawFrame(ctx, image, part, progress, project.person, segment.motion, segment.emphasisSubtitle && seconds < 3 ? segment.emphasisSubtitle : "");
         await source.add(frame / VIDEO_FPS, 1 / VIDEO_FPS);
         frame++;
         if (frame % 7 === 0 || frame === totalFrames) await feedAudioUntil(Math.min(totalFrames / VIDEO_FPS, frame / VIDEO_FPS + 0.5));

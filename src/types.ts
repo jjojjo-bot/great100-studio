@@ -6,6 +6,12 @@ export interface PromptRevision {
   created_at: string;
 }
 
+export interface CaptionBlock {
+  text: string;
+  start_sec: number;
+  end_sec: number;
+}
+
 export interface ImageCandidate {
   id: string;
   path: string;
@@ -20,6 +26,8 @@ export interface Scene {
   title: string;
   duration?: number;
   caption?: string;
+  subtitle?: string;
+  captions?: CaptionBlock[];
   motion?: ImageMotion;
   music_volume?: number;
   prompt: string;
@@ -73,7 +81,7 @@ export interface VisualAsset {
 }
 
 export interface ProjectData {
-  schema_version: 1 | "2.0";
+  schema_version: 1 | "2.0" | "2.1";
   id: string;
   episode: number;
   person: string;
@@ -100,7 +108,7 @@ export interface ProjectData {
 }
 
 export interface AppDataV2 {
-  schema_version: "2.0";
+  schema_version: "2.0" | "2.1";
   person: { name: string; one_line_intro: string; period: string };
   video: { target_duration_sec: number; concept: string };
   core_achievement: { title: string; must_visualize: boolean; scene_id: string; visual_subject: string };
@@ -109,7 +117,7 @@ export interface AppDataV2 {
     id: string; order: number; start_sec: number; end_sec: number; narration: string;
     scene_description: string; visual_type: string; shot_type: string; location: string;
     main_subject: string; main_action: string; image_prompt: string;
-    support_image_prompt: string | null; subtitle: string; motion: string;
+    support_image_prompt: string | null; subtitle: string; captions?: CaptionBlock[]; motion: string;
     overlay_required?: boolean; overlay_type?: string; overlay_note?: string;
   }>;
   ending: { title: string; message: string };

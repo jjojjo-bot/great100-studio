@@ -29,3 +29,25 @@
 .review-image-card .candidate-empty{height:auto;aspect-ratio:16/9}
 .review-thumbnail{max-width:380px}
 @media(max-width:850px){.scene-data-grid,.review-image-grid{grid-template-columns:1fr}.quality-metrics{display:grid;grid-template-columns:1fr 1fr}}
+.import-counts{display:flex;flex-wrap:wrap;gap:10px!important}
+.import-counts span{padding:8px 10px;border-radius:7px;background:#eef3ed;font-size:11px;color:#45665a}
+.import-counts strong{margin-left:5px;color:#1d4d3f}
+.v2-scene-card summary small{color:#648174;font-size:10px}
+.caption-list{border-top:1px solid #e7e4dc;margin-top:12px;padding-top:12px}
+.caption-list>strong{font-size:11px;color:#244c43}
+.caption-list p{display:flex;gap:10px;font-size:11px;line-height:1.6;margin:7px 0;white-space:pre-wrap}
+.caption-list p span{flex:0 0 84px;color:#a4683d}
+.v21-caption-panel{padding:18px;margin-bottom:18px}
+.v21-caption-panel label>strong,.caption-blocks>strong{display:block;font-size:12px;color:#214a43}
+.v21-caption-panel label>small,.caption-blocks>small{display:block;font-size:10px;color:#819089;margin:4px 0 9px}
+.v21-caption-panel>label textarea{min-height:58px;margin-top:8px}
+.caption-blocks{border-top:1px solid #e7e4dc;margin-top:15px;padding-top:15px}
+.caption-block-row{display:grid;grid-template-columns:25px minmax(0,1fr) 90px 90px;gap:9px;align-items:start;margin:8px 0}
+.caption-block-row>span{font-size:11px;color:#b26c3e;padding-top:10px}
+.caption-block-row textarea{min-height:52px}
+.caption-block-row label{font-size:10px;color:#6c7971}
+.caption-block-row input{margin-top:4px}
+.caption-settings{display:flex;justify-content:space-between;gap:15px;align-items:center;margin-top:16px;font-size:11px;color:#7b8a80}
+.caption-settings label{width:185px}
+.caption-settings select{margin-top:5px}
+@media(max-width:850px){.caption-block-row{grid-template-columns:20px 1fr 75px 75px}}

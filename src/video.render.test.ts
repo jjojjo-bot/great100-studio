@@ -76,6 +76,37 @@ describe("MP4 background music rendering", () => {
     expect(calls.audioBuffers.reduce((sum, buffer) => sum + buffer.length, 0)).toBe(10);
     expect(calls.audioBuffers.some((buffer) => buffer.some((sample) => sample > 0))).toBe(true);
   });
+
+  it("v2.1 MP4는 강조 문구와 시간별 전체 자막을 별도로 그린다", async () => {
+    const drawn: string[] = [];
+    vi.stubGlobal("Image", class { naturalWidth = 1920; naturalHeight = 1080; src = ""; decode = async () => {}; });
+    const canvas = { width: 0, height: 0, getContext: () => ({
+      canvas, fillStyle: "", font: "", textAlign: "", textBaseline: "",
+      fillRect: () => {}, drawImage: () => {}, fillText: (text: string) => { drawn.push(text); },
+      measureText: (text: string) => ({ width: text.length * 10 }),
+    }) };
+    vi.stubGlobal("document", { createElement: () => canvas });
+    const project = createProjectDraft(2, "이순신", "장군 · 지도자", SAMPLE_WORK_TEXT);
+    project.schema_version = "2.1";
+    project.scenes = [project.scenes[0]];
+    project.scenes[0].duration = 1;
+    project.scenes[0].start_sec = 0;
+    project.scenes[0].end_sec = 1;
+    project.scenes[0].narration = "앞문장 뒷문장";
+    project.scenes[0].subtitle = "강조 문구";
+    project.scenes[0].captions = [
+      { text: "앞문장", start_sec: 0, end_sec: 0.5 },
+      { text: "뒷문장", start_sec: 0.5, end_sec: 1 },
+    ];
+    project.scenes[0].candidates = [{ id: "one", path: "image.png", preview_url: "data:image/png;base64,a", created_at: "now", mode: "uploaded" }];
+    project.scenes[0].selected_candidate_id = "one";
+    project.ending_message = "";
+    await renderProjectMp4(project);
+    expect(drawn).toContain("강조 문구");
+    expect(drawn).toContain("앞문장");
+    expect(drawn).toContain("뒷문장");
+    expect(drawn).not.toContain(project.scenes[0].caption);
+  });
 });
 
 afterEach(() => vi.unstubAllGlobals());
