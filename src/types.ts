@@ -30,6 +30,7 @@ export interface Scene {
   captions?: CaptionBlock[];
   motion?: ImageMotion;
   music_volume?: number;
+  narration_audio?: SceneNarrationAudio;
   prompt: string;
   full_prompt?: string;
   prompt_history: PromptRevision[];
@@ -53,6 +54,13 @@ export interface Scene {
   overlay_required?: boolean;
   overlay_type?: string;
   overlay_note?: string;
+}
+
+export interface SceneNarrationAudio {
+  name: string;
+  mime_type: string;
+  path: string;
+  duration_sec: number;
 }
 
 export interface BackgroundMusic {

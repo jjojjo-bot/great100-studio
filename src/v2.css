@@ -55,3 +55,12 @@
 .review-support{display:flex;align-items:center;gap:8px;margin:8px 0}
 .review-support img{width:72px;aspect-ratio:16/9;object-fit:cover;border-radius:5px}
 .review-support small{font-size:10px;color:#6a806f}
+.narration-panel{padding:18px;margin-bottom:16px}
+.narration-head{display:flex;justify-content:space-between;gap:16px;align-items:start}
+.narration-head strong{display:block;color:#214a43;font-size:12px}
+.narration-head small,.narration-hint{display:block;color:#718178;font-size:10px;line-height:1.6;margin-top:5px}
+.narration-head>span{flex:none;color:#ab6a3d;font-size:11px}
+.narration-actions{display:flex;gap:9px;flex-wrap:wrap;margin:13px 0}
+.narration-file{display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:#f3f5ef;border-radius:8px;padding:10px}
+.narration-file>span{color:#355d50;font-size:11px}
+.narration-file audio{height:32px;max-width:100%}

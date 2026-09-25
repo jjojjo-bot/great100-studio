@@ -1,4 +1,4 @@
-import { getBackgroundMusic } from "./platform";
+import { getBackgroundMusic, getSceneNarration } from "./platform";
 import { reportForProject } from "./app-data";
 import type { CaptionBlock, ImageMotion, ProjectData } from "./types";
 
@@ -9,6 +9,7 @@ export const OPENING_DURATION = 3;
 
 export interface VideoSegment {
   title: string;
+  sceneId?: string;
   caption: string;
   timedCaptions?: CaptionBlock[];
   emphasisSubtitle?: string;
@@ -47,7 +48,7 @@ export function buildVideoPlan(project: ProjectData): VideoSegment[] {
     if (scene.support_selected_candidate_id && !support) throw new Error(`Scene ${String(scene.number).padStart(2, "0")}의 선택한 보조 이미지를 찾지 못했습니다.`);
     const duration = scene.duration ?? 10;
     if (!Number.isFinite(duration) || duration < 1 || duration > 120) throw new Error(`Scene ${scene.number}의 길이는 1~120초여야 합니다.`);
-    return { title: scene.title, caption: project.schema_version === "2.1" ? scene.narration || "" : scene.caption ?? scene.title,
+    return { title: scene.title, sceneId: scene.id, caption: project.schema_version === "2.1" ? scene.narration || "" : scene.caption ?? scene.title,
       timedCaptions: project.schema_version === "2.1" ? scene.captions?.map((block) => ({ ...block, start_sec: block.start_sec - (scene.start_sec || 0), end_sec: block.end_sec - (scene.start_sec || 0) })) : undefined,
       emphasisSubtitle: project.schema_version === "2.1" ? scene.subtitle : undefined,
       imageUrl: image.preview_url, supportImageUrl: support?.preview_url, supportStartsAt: support ? duration / 2 : undefined,
@@ -99,15 +100,45 @@ export function musicGainAtTime(sections: MusicSection[], time: number): number 
   return gainAtTime(musicTimeline(sections), time);
 }
 
-function makeMusicChunk(context: AudioContext, music: AudioBuffer, timeline: MusicInterval[], startSample: number, sampleCount: number): AudioBuffer {
-  const channelCount = Math.min(2, music.numberOfChannels);
-  const chunk = context.createBuffer(channelCount, sampleCount, music.sampleRate);
-  const sources = Array.from({ length: channelCount }, (_, channel) => music.getChannelData(channel));
+type DecodedAudio = { sampleRate: number; duration: number; channels: Float32Array[] };
+type NarrationClip = { start: number; end: number; audio: DecodedAudio };
+
+function decodedAudio(buffer: AudioBuffer): DecodedAudio {
+  return { sampleRate: buffer.sampleRate, duration: buffer.duration || buffer.length / buffer.sampleRate,
+    channels: Array.from({ length: Math.min(2, buffer.numberOfChannels) }, (_, channel) => buffer.getChannelData(channel)) };
+}
+
+function audioSample(audio: DecodedAudio, channel: number, seconds: number, loop = false): number {
+  const samples = audio.channels[Math.min(channel, audio.channels.length - 1)];
+  if (!samples?.length) return 0;
+  const position = seconds * audio.sampleRate;
+  const index = Math.floor(position);
+  const left = loop ? ((index % samples.length) + samples.length) % samples.length : index;
+  if (!loop && (left < 0 || left >= samples.length)) return 0;
+  const right = loop ? (left + 1) % samples.length : Math.min(left + 1, samples.length - 1);
+  return samples[left] + (samples[right] - samples[left]) * (position - index);
+}
+
+function makeAudioChunk(context: AudioContext, music: DecodedAudio | null, narrations: NarrationClip[], timeline: MusicInterval[], startSample: number, sampleCount: number, sampleRate: number, channelCount: number): AudioBuffer {
+  const chunk = context.createBuffer(channelCount, sampleCount, sampleRate);
   const targets = Array.from({ length: channelCount }, (_, channel) => chunk.getChannelData(channel));
+  let narrationIndex = narrations.findIndex((clip) => clip.end > startSample / sampleRate);
+  if (narrationIndex < 0) narrationIndex = narrations.length;
   for (let index = 0; index < sampleCount; index++) {
-    const gain = gainAtTime(timeline, (startSample + index) / music.sampleRate);
-    const loopIndex = (startSample + index) % music.length;
-    for (let channel = 0; channel < channelCount; channel++) targets[channel][index] = sources[channel][loopIndex] * gain;
+    const time = (startSample + index) / sampleRate;
+    while (narrationIndex < narrations.length && time >= narrations[narrationIndex].end) narrationIndex++;
+    const clip = narrations[narrationIndex];
+    const voiceTime = clip ? time - clip.start : -1;
+    const voiceDuration = clip ? Math.min(clip.audio.duration, clip.end - clip.start) : 0;
+    const voiceActive = clip && voiceTime >= 0 && voiceTime < voiceDuration;
+    const voiceFade = voiceActive ? Math.min(1, voiceTime / 0.04, (voiceDuration - voiceTime) / 0.04) : 0;
+    const duck = voiceActive ? Math.min(1, voiceTime / 0.18, (voiceDuration - voiceTime) / 0.18) : 0;
+    const musicGain = music ? gainAtTime(timeline, time) * (1 - 0.78 * duck) : 0;
+    for (let channel = 0; channel < channelCount; channel++) {
+      const background = music ? audioSample(music, channel, time, true) * musicGain : 0;
+      const voice = voiceActive ? audioSample(clip.audio, channel, voiceTime) * voiceFade : 0;
+      targets[channel][index] = Math.max(-1, Math.min(1, background + voice));
+    }
   }
   return chunk;
 }
@@ -304,20 +335,43 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
   const timeline = musicTimeline(plan);
   let audioContext: AudioContext | null = null;
   let audioSource: import("mediabunny").AudioBufferSource | null = null;
-  let decodedMusic: AudioBuffer | null = null;
-  if (project.background_music) {
-    const musicBlob = await getBackgroundMusic(project);
-    if (!musicBlob) throw new Error("배경음악 파일을 찾지 못했습니다. 다시 업로드해 주세요.");
+  let music: DecodedAudio | null = null;
+  const narrations: NarrationClip[] = [];
+  let audioSampleRate = 0;
+  let audioChannels = 0;
+  if (project.background_music || project.scenes.some((scene) => scene.narration_audio)) {
     audioContext = new AudioContext();
     try {
-      decodedMusic = project.background_music.mime_type === "video/mp4"
-        ? await (await import("./music")).decodeMpeg4Audio(musicBlob, audioContext)
-        : await audioContext.decodeAudioData(await musicBlob.arrayBuffer());
+      if (project.background_music) {
+        const musicBlob = await getBackgroundMusic(project);
+        if (!musicBlob) throw new Error("배경음악 파일을 찾지 못했습니다. 다시 업로드해 주세요.");
+        const buffer = project.background_music.mime_type === "video/mp4"
+          ? await (await import("./music")).decodeMpeg4Audio(musicBlob, audioContext)
+          : await audioContext.decodeAudioData(await musicBlob.arrayBuffer());
+        music = decodedAudio(buffer);
+      }
+      let start = 0;
+      for (const segment of plan) {
+        const scene = segment.sceneId ? project.scenes.find((item) => item.id === segment.sceneId) : undefined;
+        if (scene?.narration_audio) {
+          const blob = await getSceneNarration(project, scene);
+          if (!blob) throw new Error(`Scene ${scene.number} 녹음 파일을 찾지 못했습니다. 다시 녹음하거나 업로드해 주세요.`);
+          const buffer = ["audio/mp4", "video/mp4"].includes(scene.narration_audio.mime_type)
+            ? await (await import("./music")).decodeMpeg4Audio(blob, audioContext)
+            : await audioContext.decodeAudioData(await blob.arrayBuffer());
+          const audio = decodedAudio(buffer);
+          if (audio.duration > segment.duration + 0.15) throw new Error(`Scene ${scene.number} 녹음이 장면 길이보다 깁니다. 다시 녹음해 주세요.`);
+          narrations.push({ start, end: start + segment.duration, audio });
+        }
+        start += segment.duration;
+      }
     }
-    catch { await audioContext.close(); throw new Error("배경음악을 읽지 못했습니다. 다른 파일로 다시 업로드해 주세요."); }
-    if (!decodedMusic.length || !(await canEncodeAudio("aac", { numberOfChannels: Math.min(2, decodedMusic.numberOfChannels), sampleRate: decodedMusic.sampleRate }))) {
+    catch (error) { await audioContext.close(); throw error; }
+    audioSampleRate = audioContext.sampleRate || music?.sampleRate || narrations[0]?.audio.sampleRate || 48_000;
+    audioChannels = Math.max(music?.channels.length || 0, ...narrations.map((clip) => clip.audio.channels.length));
+    if (!audioChannels || !(await canEncodeAudio("aac", { numberOfChannels: audioChannels, sampleRate: audioSampleRate }))) {
       await audioContext.close();
-      throw new Error("이 브라우저는 음악이 포함된 MP4 인코딩을 지원하지 않습니다. 최신 Chrome 또는 Edge에서 다시 시도해 주세요.");
+      throw new Error("이 브라우저는 오디오가 포함된 MP4 인코딩을 지원하지 않습니다. 최신 Chrome 또는 Edge에서 다시 시도해 주세요.");
     }
     audioSource = new AudioBufferSource({ codec: "aac", quality: new Quality("medium") });
     output.addAudioTrack(audioSource);
@@ -326,12 +380,12 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
     await output.start();
     let audioSample = 0;
     const feedAudioUntil = async (seconds: number) => {
-      if (!audioContext || !audioSource || !decodedMusic) return;
-      const target = Math.min(Math.round((totalFrames / VIDEO_FPS) * decodedMusic.sampleRate), Math.round(seconds * decodedMusic.sampleRate));
-      const chunkSize = Math.max(1, Math.round(decodedMusic.sampleRate / 2));
+      if (!audioContext || !audioSource) return;
+      const target = Math.min(Math.round((totalFrames / VIDEO_FPS) * audioSampleRate), Math.round(seconds * audioSampleRate));
+      const chunkSize = Math.max(1, Math.round(audioSampleRate / 2));
       while (audioSample < target) {
         const count = Math.min(chunkSize, target - audioSample);
-        await audioSource.add(makeMusicChunk(audioContext, decodedMusic, timeline, audioSample, count));
+        await audioSource.add(makeAudioChunk(audioContext, music, narrations, timeline, audioSample, count, audioSampleRate, audioChannels));
         audioSample += count;
       }
     };

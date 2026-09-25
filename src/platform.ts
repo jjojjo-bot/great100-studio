@@ -3,10 +3,10 @@ import { openDB } from "idb";
 import JSZip from "jszip";
 import { MAX_MUSIC_BYTES, MAX_MUSIC_SECONDS } from "./music-limits";
 import { composeScenePrompt, composeThumbnailPrompt, withFullImagePrompts } from "./prompts";
-import type { BackgroundMusic, GenerateRequest, ImageCandidate, ProjectData, VisualAsset } from "./types";
+import type { BackgroundMusic, GenerateRequest, ImageCandidate, ProjectData, Scene, SceneNarrationAudio, VisualAsset } from "./types";
 
 export const isTauri = () => "__TAURI_INTERNALS__" in window;
-const VIDEO_RENDER_VERSION = 4;
+const VIDEO_RENDER_VERSION = 5;
 
 const database = () => openDB("great100-studio", 3, {
   upgrade(db) {
@@ -61,7 +61,9 @@ export async function deleteProject(project: ProjectData): Promise<string | unde
     throw new Error("삭제할 프로젝트가 저장된 내용과 일치하지 않습니다. 목록을 새로고침해 주세요.");
   }
   const tx = db.transaction(["projects", "videos", "audio"], "readwrite");
-  await Promise.all([tx.objectStore("projects").delete(project.id), tx.objectStore("videos").delete(project.id), tx.objectStore("audio").delete(project.id)]);
+  const audio = tx.objectStore("audio");
+  const narrationKeys = (await audio.getAllKeys()).filter((key) => typeof key === "string" && key.startsWith(`${project.id}:narration:`));
+  await Promise.all([tx.objectStore("projects").delete(project.id), tx.objectStore("videos").delete(project.id), audio.delete(project.id), ...narrationKeys.map((key) => audio.delete(key))]);
   await tx.done;
 }
 
@@ -129,6 +131,71 @@ export async function removeBackgroundMusic(project: ProjectData): Promise<void>
   else {
     const db = await database();
     await db.delete("audio", project.id);
+  }
+}
+
+const NARRATION_FORMATS: Record<string, string> = {
+  mp3: "audio/mpeg", wav: "audio/wav", m4a: "audio/mp4", mp4: "video/mp4", webm: "audio/webm",
+};
+const narrationKey = (project: ProjectData, scene: Scene) => `${project.id}:narration:${scene.id}`;
+
+export function detectNarrationFormat(file: Pick<File, "name" | "type" | "size">): { extension: string; mime: string } {
+  if (!file.size || file.size > 30_000_000) throw new Error("씬 녹음은 30MB 이하 파일만 사용할 수 있습니다.");
+  const extension = file.name.split(".").at(-1)?.toLowerCase() || "";
+  const mime = NARRATION_FORMATS[extension];
+  if (!mime) throw new Error("MP3, WAV, M4A, MP4, WebM 녹음만 사용할 수 있습니다.");
+  const actual = file.type.split(";")[0].toLowerCase();
+  if (actual && actual !== mime && !(extension === "wav" && ["audio/x-wav", "audio/wave"].includes(actual)) && !(extension === "m4a" && actual === "audio/x-m4a")) {
+    throw new Error("녹음 파일 확장자와 오디오 형식이 맞지 않습니다.");
+  }
+  return { extension, mime };
+}
+
+export async function saveSceneNarration(project: ProjectData, scene: Scene, file: File): Promise<SceneNarrationAudio> {
+  const { extension, mime } = detectNarrationFormat(file);
+  const audioContext = new AudioContext();
+  let duration = 0;
+  try {
+    duration = extension === "mp4" || extension === "m4a"
+      ? await (await import("./music")).inspectMpeg4Audio(file)
+      : (await audioContext.decodeAudioData(await file.arrayBuffer())).duration;
+  } catch { throw new Error("녹음 파일을 읽지 못했습니다. 다른 파일을 선택해 주세요."); }
+  finally { await audioContext.close(); }
+  const sceneDuration = scene.duration ?? 10;
+  if (!Number.isFinite(duration) || duration <= 0) throw new Error("녹음 길이를 확인할 수 없습니다.");
+  if (duration > sceneDuration + 0.15) throw new Error(`녹음이 장면 길이(${sceneDuration}초)보다 깁니다. ${duration.toFixed(1)}초 녹음을 짧게 다시 만들거나 장면 시간을 조정해 주세요.`);
+  const narration = { name: file.name, mime_type: mime, path: `${project.project_path}/03_images/scene${String(scene.number).padStart(2, "0")}/narration.${extension}`, duration_sec: duration };
+  if (isTauri()) {
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(new Error("녹음 파일을 읽지 못했습니다."));
+      reader.readAsDataURL(file);
+    });
+    await invoke("save_scene_narration", { projectPath: project.project_path, sceneNumber: scene.number, mimeType: mime, dataUrl: `data:${mime};base64,${dataUrl.slice(dataUrl.indexOf(",") + 1)}` });
+  } else {
+    const db = await database();
+    await db.put("audio", { id: narrationKey(project, scene), blob: file });
+  }
+  return narration;
+}
+
+export async function getSceneNarration(project: ProjectData, scene: Scene): Promise<Blob | null> {
+  if (!scene.narration_audio) return null;
+  if (isTauri()) {
+    const encoded = await invoke<string>("read_scene_narration", { projectPath: project.project_path, sceneNumber: scene.number, mimeType: scene.narration_audio.mime_type });
+    return await (await fetch(`data:${scene.narration_audio.mime_type};base64,${encoded}`)).blob();
+  }
+  const db = await database();
+  const saved = await db.get("audio", narrationKey(project, scene)) as { blob: Blob } | undefined;
+  return saved?.blob || null;
+}
+
+export async function removeSceneNarration(project: ProjectData, scene: Scene): Promise<void> {
+  if (isTauri()) await invoke("remove_scene_narration", { projectPath: project.project_path, sceneNumber: scene.number });
+  else {
+    const db = await database();
+    await db.delete("audio", narrationKey(project, scene));
   }
 }
 
@@ -251,6 +318,12 @@ export async function buildProjectZip(project: ProjectData, video?: Blob): Promi
     const music = await getBackgroundMusic(project);
     if (!music) throw new Error("배경음악 파일을 찾지 못했습니다. 다시 업로드해 주세요.");
     root.file(`01_source/background_music.${project.background_music.path.split(".").at(-1)}`, music);
+  }
+  for (const scene of project.scenes) {
+    if (!scene.narration_audio) continue;
+    const narration = await getSceneNarration(project, scene);
+    if (!narration) throw new Error(`Scene ${scene.number} 녹음 파일을 찾지 못했습니다.`);
+    root.file(`03_images/scene${String(scene.number).padStart(2, "0")}/narration.${scene.narration_audio.path.split(".").at(-1)}`, narration);
   }
   const withoutPreviews = structuredClone(withFullImagePrompts(project));
   for (const asset of [withoutPreviews.anchor, withoutPreviews.thumbnail, ...withoutPreviews.scenes]) {

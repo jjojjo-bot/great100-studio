@@ -350,6 +350,86 @@ fn remove_background_music(project_path: String) -> Result<(), String> {
     Ok(())
 }
 
+fn narration_extension(mime_type: &str) -> Result<&'static str, String> {
+    match mime_type {
+        "audio/mpeg" => Ok("mp3"),
+        "audio/wav" => Ok("wav"),
+        "audio/mp4" => Ok("m4a"),
+        "video/mp4" => Ok("mp4"),
+        "audio/webm" => Ok("webm"),
+        _ => Err("지원하지 않는 녹음 형식입니다.".into()),
+    }
+}
+
+fn narration_dir(project_path: &str, scene_number: u32) -> Result<PathBuf, String> {
+    if !(1..=9999).contains(&scene_number) { return Err("장면 번호가 올바르지 않습니다.".into()); }
+    let project = safe_project_path(project_path)?;
+    if !project.join("project_data.json").is_file() { return Err("프로젝트를 찾지 못했습니다.".into()); }
+    let parent = project.join("03_images");
+    let metadata = fs::symlink_metadata(&parent).map_err(|error| error.to_string())?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() { return Err("장면 폴더가 올바르지 않습니다.".into()); }
+    let dir = parent.join(format!("scene{scene_number:02}"));
+    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    let metadata = fs::symlink_metadata(&dir).map_err(|error| error.to_string())?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() { return Err("장면 폴더가 올바르지 않습니다.".into()); }
+    Ok(dir)
+}
+
+fn checked_narration_path(dir: &Path, extension: &str) -> Result<PathBuf, String> {
+    let path = dir.join(format!("narration.{extension}"));
+    if let Ok(metadata) = fs::symlink_metadata(&path) {
+        if !metadata.is_file() || metadata.file_type().is_symlink() { return Err("녹음 파일 경로가 올바르지 않습니다.".into()); }
+    }
+    Ok(path)
+}
+
+#[tauri::command]
+fn save_scene_narration(project_path: String, scene_number: u32, mime_type: String, data_url: String) -> Result<String, String> {
+    let extension = narration_extension(&mime_type)?;
+    let dir = narration_dir(&project_path, scene_number)?;
+    let prefix = format!("data:{mime_type};base64,");
+    let encoded = data_url.strip_prefix(&prefix).ok_or("녹음 데이터 형식이 올바르지 않습니다.")?;
+    if encoded.len() > 40_000_004 { return Err("30MB 이하 녹음만 사용할 수 있습니다.".into()); }
+    let bytes = STANDARD.decode(encoded).map_err(|error| error.to_string())?;
+    if bytes.is_empty() || bytes.len() > 30_000_000 { return Err("30MB 이하 녹음만 사용할 수 있습니다.".into()); }
+    let valid = match extension {
+        "mp3" => bytes.starts_with(b"ID3") || (bytes.len() > 1 && bytes[0] == 0xff && bytes[1] & 0xe0 == 0xe0),
+        "wav" => bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(&b"WAVE"[..]),
+        "m4a" | "mp4" => bytes.get(4..8) == Some(&b"ftyp"[..]),
+        "webm" => bytes.starts_with(&[0x1a, 0x45, 0xdf, 0xa3]),
+        _ => false,
+    };
+    if !valid { return Err("녹음 파일 내용이 올바르지 않습니다.".into()); }
+    let path = checked_narration_path(&dir, extension)?;
+    fs::write(&path, bytes).map_err(|error| error.to_string())?;
+    for old_extension in ["mp3", "wav", "m4a", "mp4", "webm"] {
+        if old_extension != extension {
+            let old = checked_narration_path(&dir, old_extension)?;
+            if old.is_file() { fs::remove_file(old).map_err(|error| error.to_string())?; }
+        }
+    }
+    Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn read_scene_narration(project_path: String, scene_number: u32, mime_type: String) -> Result<String, String> {
+    let extension = narration_extension(&mime_type)?;
+    let path = checked_narration_path(&narration_dir(&project_path, scene_number)?, extension)?;
+    let bytes = fs::read(path).map_err(|error| error.to_string())?;
+    if bytes.len() > 30_000_000 { return Err("녹음 파일이 너무 큽니다.".into()); }
+    Ok(STANDARD.encode(bytes))
+}
+
+#[tauri::command]
+fn remove_scene_narration(project_path: String, scene_number: u32) -> Result<(), String> {
+    let dir = narration_dir(&project_path, scene_number)?;
+    for extension in ["mp3", "wav", "m4a", "mp4", "webm"] {
+        let path = checked_narration_path(&dir, extension)?;
+        if path.is_file() { fs::remove_file(path).map_err(|error| error.to_string())?; }
+    }
+    Ok(())
+}
+
 async fn generate_openai(
     api_key: &str,
     request: &GenerateRequest,
@@ -504,7 +584,10 @@ pub fn run() {
             save_video,
             save_background_music,
             read_background_music,
-            remove_background_music
+            remove_background_music,
+            save_scene_narration,
+            read_scene_narration,
+            remove_scene_narration
         ])
         .run(tauri::generate_context!())
         .expect("error while running Great100 Studio");

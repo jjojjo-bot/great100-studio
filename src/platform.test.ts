@@ -3,7 +3,7 @@ import "fake-indexeddb/auto";
 import JSZip from "jszip";
 import { openDB } from "idb";
 import { createProjectDraft } from "./parser";
-import { buildProjectZip, createProjectOnDisk, deleteProject, detectImageFormat, detectMusicFormat, getBackgroundMusic, getRenderedVideo, importImageCandidates, listProjects, removeBackgroundMusic, saveBackgroundMusic, saveProject, saveRenderedVideo } from "./platform";
+import { buildProjectZip, createProjectOnDisk, deleteProject, detectImageFormat, detectMusicFormat, detectNarrationFormat, getBackgroundMusic, getRenderedVideo, getSceneNarration, importImageCandidates, listProjects, removeBackgroundMusic, removeSceneNarration, saveBackgroundMusic, saveProject, saveRenderedVideo, saveSceneNarration } from "./platform";
 import { SAMPLE_WORK_TEXT } from "./sample";
 
 describe("project export", () => {
@@ -108,6 +108,43 @@ describe("background music storage", () => {
   });
 });
 
+describe("scene narration storage", () => {
+  it("uploads and exports one scene recording, then removes it", async () => {
+    vi.stubGlobal("window", {});
+    vi.stubGlobal("AudioContext", class {
+      decodeAudioData = async () => ({ duration: 1.25 });
+      close = async () => {};
+    });
+    const project = createProjectDraft(33, "내레이션 시험", "장군 · 지도자", SAMPLE_WORK_TEXT);
+    project.project_path = await createProjectOnDisk(project);
+    const scene = project.scenes[0];
+    const file = new File([new Uint8Array([82, 73, 70, 70, 0, 0, 0, 0, 87, 65, 86, 69])], "voice.wav", { type: "audio/wav" });
+    expect(detectNarrationFormat(file)).toMatchObject({ extension: "wav", mime: "audio/wav" });
+    scene.narration_audio = await saveSceneNarration(project, scene, file);
+    expect(scene.narration_audio.duration_sec).toBe(1.25);
+    expect((await getSceneNarration(project, scene))?.size).toBe(file.size);
+    const zip = await JSZip.loadAsync(await (await buildProjectZip(project)).arrayBuffer());
+    expect(zip.file(`${project.folder_name}/03_images/scene01/narration.wav`)).not.toBeNull();
+    await removeSceneNarration(project, scene);
+    expect(await getSceneNarration(project, scene)).toBeNull();
+  });
+
+  it("rejects a recording longer than its scene without replacing the saved file", async () => {
+    vi.stubGlobal("window", {});
+    vi.stubGlobal("AudioContext", class {
+      decodeAudioData = async () => ({ duration: 12 });
+      close = async () => {};
+    });
+    const project = createProjectDraft(34, "길이 시험", "장군 · 지도자", SAMPLE_WORK_TEXT);
+    project.project_path = await createProjectOnDisk(project);
+    const scene = project.scenes[0];
+    scene.duration = 10;
+    const file = new File([new Uint8Array([82, 73, 70, 70])], "long.wav", { type: "audio/wav" });
+    await expect(saveSceneNarration(project, scene, file)).rejects.toThrow("장면 길이");
+    expect(await getSceneNarration(project, scene)).toBeNull();
+  });
+});
+
 describe("project deletion", () => {
   it("removes only the matching browser project and its rendered MP4", async () => {
     vi.stubGlobal("window", {});
@@ -115,6 +152,9 @@ describe("project deletion", () => {
     removed.project_path = await createProjectOnDisk(removed);
     await saveProject(removed);
     await saveRenderedVideo(removed, new Blob(["test"], { type: "video/mp4" }));
+    const db = await openDB("great100-studio", 3);
+    const recordingKey = `${removed.id}:narration:${removed.scenes[0].id}`;
+    await db.put("audio", { id: recordingKey, blob: new Blob(["voice"]) });
     const kept = createProjectDraft(22, "보존 시험", "장군 · 지도자", SAMPLE_WORK_TEXT);
     kept.project_path = await createProjectOnDisk(kept);
     await saveProject(kept);
@@ -125,6 +165,7 @@ describe("project deletion", () => {
     expect(remaining.some((item) => item.id === removed.id)).toBe(false);
     expect(remaining.some((item) => item.id === kept.id)).toBe(true);
     expect(await getRenderedVideo(removed)).toBeNull();
+    expect(await db.get("audio", recordingKey)).toBeUndefined();
   });
 });
 

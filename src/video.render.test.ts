@@ -2,9 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createProjectDraft } from "./parser";
 import { SAMPLE_WORK_TEXT } from "./sample";
 
-const calls = vi.hoisted(() => ({ audioBuffers: [] as Float32Array[], audioTracks: 0, videoFrames: 0 }));
+const calls = vi.hoisted(() => ({ audioBuffers: [] as Float32Array[], audioTracks: 0, videoFrames: 0, narrationBlob: null as Blob | null }));
 
-vi.mock("./platform", () => ({ getBackgroundMusic: async () => new Blob(["music"]) }));
+vi.mock("./platform", () => ({ getBackgroundMusic: async () => new Blob(["music"]), getSceneNarration: async () => calls.narrationBlob }));
 vi.mock("mediabunny", () => ({
   BufferTarget: class { buffer: Uint8Array | null = null; },
   CanvasSource: class { add = async () => { calls.videoFrames++; }; },
@@ -180,6 +180,83 @@ describe("MP4 background music rendering", () => {
     expect(titleAlphas.some(({ frame }) => frame >= 45)).toBe(false);
     expect(captionAlphas[0]).toMatchObject({ frame: 45, alpha: 0 });
     expect(captionAlphas.at(-1)!.alpha).toBe(1);
+  });
+
+  it("녹음만 있어도 오디오 트랙을 만들고 해당 씬 시작에 맞춰 배치한다", async () => {
+    calls.audioBuffers.length = 0;
+    calls.audioTracks = 0;
+    calls.videoFrames = 0;
+    calls.narrationBlob = new Blob(["voice"], { type: "audio/wav" });
+    const context = {
+      sampleRate: 10,
+      decodeAudioData: async () => ({ length: 10, duration: 1, sampleRate: 10, numberOfChannels: 1, getChannelData: () => new Float32Array(10).fill(0.8) }),
+      createBuffer: (_channels: number, length: number) => {
+        const samples = new Float32Array(length);
+        return { getChannelData: () => samples };
+      },
+      close: async () => {},
+    };
+    vi.stubGlobal("AudioContext", class { constructor() { return context; } });
+    vi.stubGlobal("Image", class { naturalWidth = 1920; naturalHeight = 1080; src = ""; decode = async () => {}; });
+    const canvas = { width: 0, height: 0, getContext: () => ({
+      canvas, fillStyle: "", font: "", textAlign: "", textBaseline: "", globalAlpha: 1,
+      fillRect: () => {}, drawImage: () => {}, fillText: () => {}, measureText: (value: string) => ({ width: value.length * 10 }),
+    }) };
+    vi.stubGlobal("document", { createElement: () => canvas });
+    const project = createProjectDraft(2, "이순신", "장군 · 지도자", SAMPLE_WORK_TEXT);
+    project.scenes = [project.scenes[0]];
+    project.scenes[0].duration = 2;
+    project.scenes[0].candidates = [{ id: "one", path: "one.png", preview_url: "one-url", created_at: "now", mode: "uploaded" }];
+    project.scenes[0].selected_candidate_id = "one";
+    project.scenes[0].narration_audio = { name: "voice.wav", mime_type: "audio/wav", path: "narration.wav", duration_sec: 1 };
+    project.ending_message = "";
+    await renderProjectMp4(project);
+    const samples = calls.audioBuffers.flatMap((chunk) => Array.from(chunk));
+    expect(calls.audioTracks).toBe(1);
+    expect(samples).toHaveLength(50);
+    expect(samples.slice(0, 30).every((sample) => sample === 0)).toBe(true);
+    expect(samples[31]).toBeGreaterThan(0.5);
+    expect(samples.slice(40).every((sample) => sample === 0)).toBe(true);
+    calls.narrationBlob = null;
+  });
+
+  it("내레이션이 들리는 동안 배경음악을 낮춰 한 트랙에 섞는다", async () => {
+    calls.audioBuffers.length = 0;
+    calls.audioTracks = 0;
+    calls.narrationBlob = new Blob(["voice"], { type: "audio/wav" });
+    let decoded = 0;
+    const context = {
+      sampleRate: 10,
+      decodeAudioData: async () => {
+        const value = decoded++ === 0 ? 0.4 : 0.5;
+        return { length: 10, duration: 1, sampleRate: 10, numberOfChannels: 1, getChannelData: () => new Float32Array(10).fill(value) };
+      },
+      createBuffer: (_channels: number, length: number) => {
+        const samples = new Float32Array(length);
+        return { getChannelData: () => samples };
+      },
+      close: async () => {},
+    };
+    vi.stubGlobal("AudioContext", class { constructor() { return context; } });
+    vi.stubGlobal("Image", class { naturalWidth = 1920; naturalHeight = 1080; src = ""; decode = async () => {}; });
+    const canvas = { width: 0, height: 0, getContext: () => ({ canvas, fillStyle: "", font: "", textAlign: "", textBaseline: "", globalAlpha: 1,
+      fillRect: () => {}, drawImage: () => {}, fillText: () => {}, measureText: (value: string) => ({ width: value.length * 10 }) }) };
+    vi.stubGlobal("document", { createElement: () => canvas });
+    const project = createProjectDraft(2, "이순신", "장군 · 지도자", SAMPLE_WORK_TEXT);
+    project.scenes = [project.scenes[0]];
+    project.scenes[0].duration = 2;
+    project.scenes[0].music_volume = 50;
+    project.scenes[0].candidates = [{ id: "one", path: "one.png", preview_url: "one-url", created_at: "now", mode: "uploaded" }];
+    project.scenes[0].selected_candidate_id = "one";
+    project.scenes[0].narration_audio = { name: "voice.wav", mime_type: "audio/wav", path: "narration.wav", duration_sec: 1 };
+    project.background_music = { name: "music.wav", mime_type: "audio/wav", path: "music.wav" };
+    project.ending_message = "";
+    await renderProjectMp4(project);
+    const samples = calls.audioBuffers.flatMap((chunk) => Array.from(chunk));
+    expect(calls.audioTracks).toBe(1);
+    expect(samples[20]).toBeCloseTo(0.2);
+    expect(samples[35]).toBeCloseTo(0.544);
+    calls.narrationBlob = null;
   });
 });
 

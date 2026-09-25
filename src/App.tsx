@@ -12,6 +12,7 @@ import {
   FolderOpen,
   Image as ImageIcon,
   LoaderCircle,
+  Mic,
   Music2,
   KeyRound,
   Plus,
@@ -25,8 +26,9 @@ import {
 import { createProjectDraft, DEFAULT_STYLE, parseWorkText } from "./parser";
 import { completionErrors, createV2ProjectDraft, parseAppData, reportForProject } from "./app-data";
 import { composeScenePrompt, composeThumbnailPrompt } from "./prompts";
-import { createProjectOnDisk, deleteProject, downloadBlob, exportProjectZip, generateImages, getAccessCode, getBackgroundMusic, getRenderedVideo, importImageCandidates, isTauri, listProjects, removeBackgroundMusic, saveBackgroundMusic, saveProject, saveRenderedVideo, setAccessCode } from "./platform";
+import { createProjectOnDisk, deleteProject, downloadBlob, exportProjectZip, generateImages, getAccessCode, getBackgroundMusic, getRenderedVideo, importImageCandidates, isTauri, listProjects, removeBackgroundMusic, removeSceneNarration, saveBackgroundMusic, saveProject, saveRenderedVideo, setAccessCode } from "./platform";
 import { buildVideoPlan, renderProjectMp4, sceneMusicVolume } from "./video";
+import { SceneNarrationPanel } from "./SceneNarrationPanel";
 import { SAMPLE_WORK_TEXT } from "./sample";
 import type { ImageCandidate, ImageMotion, ProjectData, Scene, VisualAsset } from "./types";
 
@@ -149,7 +151,7 @@ function App() {
         </nav>
         <div className="sidebar-foot">
           <div className="mode-dot" />
-          <div><strong>{isTauri() ? "Desktop mode" : accessCode ? "API mode" : "Mock mode"}</strong><small>{isTauri() ? "로컬 프로젝트 폴더 사용" : accessCode ? "접근 코드로 이미지 생성" : "브라우저에서 체험 가능"}</small></div>
+              <div><strong>{isTauri() ? "Desktop mode" : accessCode ? "API mode" : "Mock mode"}</strong><small>{isTauri() ? "로컬 프로젝트 폴더 사용" : accessCode ? "접근 코드로 이미지 생성" : "브라우저에서 체험 가능"}</small></div>
         </div>
       </aside>
 
@@ -167,7 +169,7 @@ function App() {
               setEpisode={setEpisode} setPerson={setPerson} setCategory={setCategory} setSource={setSource}
               onSample={() => { setSource(SAMPLE_WORK_TEXT); setPerson("이순신"); setEpisode(2); }} onContinue={prepareProject} />
           )}
-          {step === 2 && project && <ParseReview project={project} onChange={persist} onReparse={reparseSource} />}
+          {step === 2 && project && <ParseReview project={project} onChange={persist} onReparse={reparseSource} onError={setNotice} />}
           {step === 3 && project && <Preflight project={project} />}
           {step === 4 && project && <AssetStudio title="인물 기준 이미지" eyebrow="CHARACTER ANCHOR" description="얼굴 일관성을 위한 기준 이미지입니다. 업로드한 이미지가 있으면 생성 단계를 건너뛰어도 됩니다." asset={project.anchor} project={project} kind="anchor" onChange={(anchor) => persist({ ...project, anchor })} />}
           {step === 5 && project && <SceneStudio project={project} onChange={updateScene} onProjectChange={persist} />}
@@ -193,7 +195,7 @@ function Dashboard({ onStart, projects, accessCode, onAccessCode, onOpen, onDown
     <div className="hero-copy">
       <div className="eyebrow">GREAT STORIES, BEAUTIFULLY MADE</div>
       <h1>한 사람의 이야기를<br /><em>한 편의 그림책처럼.</em></h1>
-      <p>Work 제작안을 붙여넣으면 장면 이미지와 자막을 준비하고<br />배경음악을 더한 MP4까지 한 흐름에서 만들 수 있어요.</p>
+      <p>Work 제작안을 붙여넣으면 장면 이미지와 자막을 준비하고<br />직접 녹음한 내레이션과 배경음악을 더한 MP4까지 만들 수 있어요.</p>
       <button className="btn primary large" onClick={onStart}><Plus size={19} /> 새 인물 프로젝트</button>
     </div>
     <div className="hero-art" aria-label="Great100 Studio illustration">
@@ -234,7 +236,7 @@ function ProjectSetup(props: SetupProps) {
   </div>;
 }
 
-function ParseReview({ project, onChange, onReparse }: { project: ProjectData; onChange: (value: ProjectData) => void; onReparse: () => void }) {
+function ParseReview({ project, onChange, onReparse, onError }: { project: ProjectData; onChange: (value: ProjectData) => void; onReparse: () => void; onError: (message: string) => void }) {
   if (project.schema_version !== 1) return <V2ParseReview project={project} />;
   const set = (patch: Partial<ProjectData>) => onChange({ ...project, ...patch });
   const editScene = (id: string, patch: Partial<Scene>) => set({ scenes: project.scenes.map((scene) => scene.id === id ? { ...scene, ...patch } : scene) });
@@ -243,9 +245,11 @@ function ParseReview({ project, onChange, onReparse }: { project: ProjectData; o
     const scene: Scene = { id: `scene-${String(number).padStart(2, "0")}-${crypto.randomUUID().slice(0, 8)}`, number, title: `장면 ${number}`, duration: 10, caption: "", prompt: "", prompt_history: [], candidates: [], status: "idle" };
     set({ scenes: [...project.scenes, scene] });
   };
-  const removeScene = (id: string) => {
+  const removeScene = async (id: string) => {
     const scene = project.scenes.find((item) => item.id === id);
     if (!scene || !window.confirm(`${scene.title} 장면과 선택한 이미지를 목록에서 삭제할까요?`)) return;
+    try { if (scene.narration_audio) await removeSceneNarration(project, scene); }
+    catch (error) { onError(`장면 녹음 삭제 실패: ${String(error)}`); return; }
     set({ scenes: project.scenes.filter((item) => item.id !== id) });
   };
   return <div className="page">
@@ -368,7 +372,7 @@ function BackgroundMusicPanel({ project, onChange }: { project: ProjectData; onC
     finally { setBusy(false); }
   };
   const remove = async () => {
-    if (!window.confirm("이 프로젝트의 배경음악을 제거할까요? 새로 만드는 MP4는 무음으로 저장됩니다.")) return;
+    if (!window.confirm("이 프로젝트의 배경음악을 제거할까요? 새로 만드는 MP4에서는 음악만 빠지고 장면 녹음은 유지됩니다.")) return;
     setBusy(true);
     setError("");
     try { await removeBackgroundMusic(project); await onChange({ ...project, background_music: undefined }); }
@@ -432,13 +436,14 @@ function SceneStudio({ project, onChange, onProjectChange }: { project: ProjectD
   return <div className="page scene-page">
     <PageHeading eyebrow="SCENE REVIEW" title="장면을 만들고 고르세요" text="프롬프트를 다듬고 각 장면의 최종 이미지를 하나씩 선택합니다." />
     <BackgroundMusicPanel project={project} onChange={onProjectChange} />
-    <div className="scene-tabs">{project.scenes.map((item) => <button key={item.id} className={item.id === scene.id ? "active" : ""} onClick={() => { setActive(item.id); setCopied(false); }}><span>{item.selected_candidate_id ? <Check size={13} /> : item.number}</span>{item.title}</button>)}</div>
+    <div className="scene-tabs">{project.scenes.map((item) => <button key={item.id} className={item.id === scene.id ? "active" : ""} onClick={() => { setActive(item.id); setCopied(false); }}><span>{item.selected_candidate_id ? <Check size={13} /> : item.number}</span>{item.title}{item.narration_audio && <Mic size={12} aria-label="녹음 있음" />}</button>)}</div>
     <div className="scene-title"><div><span>SCENE {String(scene.number).padStart(2, "0")}</span><h3>{scene.title}</h3></div></div>
     {project.schema_version !== 1 && <div className="panel scene-context"><div className="scene-context-head"><span>{scene.start_sec}–{scene.end_sec}초</span>{project.source?.core_achievement.scene_id === scene.source_scene_id && <em>★ 핵심 업적 · {project.source?.core_achievement.title}</em>}</div><p><b>내레이션</b> {scene.narration}</p><p><b>장면 설명</b> {scene.scene_description}</p><p><b>화면 구성</b> {scene.visual_type} · {scene.shot_type} · {scene.location}</p><p><b>대상과 행동</b> {scene.main_subject} · {scene.main_action}</p>{scene.overlay_required && <p><b>역사 자료 오버레이</b> {scene.overlay_type} · {scene.overlay_note}</p>}</div>}
     {project.schema_version !== 1 && <div className="panel neighbor-panel"><strong>인접 장면 비교</strong><div className="neighbor-grid">{neighbors.map((item) => { const image = item.candidates.find((candidate) => candidate.id === item.selected_candidate_id); return <div key={item.id}>{image ? <img src={image.preview_url} alt={`${item.title} 선택 이미지`} /> : <div className="neighbor-empty">아직 이미지 없음</div>}<small>{item.source_scene_id} · {item.title}</small></div>; })}</div></div>}
     <PromptEditor heading="장면 내용 (수정 가능)" value={scene.prompt} historyCount={scene.prompt_history.length} onChange={(prompt) => { setCopied(false); onChange({ ...scene, prompt }); }} onGenerate={generate} onUpload={upload} generating={scene.status === "generating"} uploading={uploading} generateCount={project.schema_version !== 1 ? 2 : 3} />
     <div className="panel full-prompt-panel"><div className="full-prompt-head"><div><strong>복사용 전체 이미지 프롬프트</strong><small>장면 내용 + 인물 외형 기준 + 공통 스타일이 항상 함께 들어갑니다.</small></div><button className="btn ghost" disabled={!scene.prompt.trim()} onClick={copyFullPrompt}>{copied ? <Check size={16} /> : <Copy size={16} />}{copied ? "복사됨" : "전체 프롬프트 복사"}</button></div><textarea aria-label="복사용 전체 이미지 프롬프트" readOnly value={fullPrompt} /></div>
     {project.schema_version === "2.1" ? <V21CaptionEditor scene={scene} onChange={onChange} /> : <div className="panel caption-panel"><label><strong>영상 자막</strong><small>이 문장이 장면 이미지 위에 표시됩니다.</small><textarea aria-label="영상 자막" value={scene.caption ?? scene.title} onChange={(event) => onChange({ ...scene, caption: event.target.value })} /></label><label className="duration-label"><strong>표시 시간 (초)</strong><input aria-label="장면 표시 시간" type="number" min="1" max="120" step="1" disabled={project.schema_version === "2.0"} title={project.schema_version === "2.0" ? "v2 시간은 APP_DATA의 시작·종료 시간을 따릅니다." : undefined} value={scene.duration ?? 10} onChange={(event) => onChange({ ...scene, duration: Number(event.target.value) })} /></label><label className="motion-label"><strong>이미지 효과</strong><small>MP4에 적용됩니다.</small><select aria-label="이미지 효과" value={scene.motion ?? "auto"} onChange={(event) => onChange({ ...scene, motion: event.target.value as ImageMotion })}><option value="auto">자동 (장면마다 다르게)</option><option value="zoom-in">천천히 줌인</option><option value="zoom-out">천천히 줌아웃</option><option value="pan-left">왼쪽으로 이동</option><option value="pan-right">오른쪽으로 이동</option><option value="pan-up">위로 이동</option><option value="pan-down">아래로 이동</option><option value="none">효과 없음</option></select></label></div>}
+    <SceneNarrationPanel key={scene.id} project={project} scene={scene} onChange={onChange} />
     <div className="panel music-volume-panel"><label><strong>이 장면의 배경음악 볼륨</strong><small>{project.background_music ? "장면이 바뀔 때 볼륨도 부드럽게 바뀝니다." : "음악을 추가하면 이 설정이 적용됩니다."}</small><input aria-label="장면 배경음악 볼륨" type="range" min="0" max="100" step="1" value={sceneMusicVolume(scene.music_volume)} onChange={(event) => onChange({ ...scene, music_volume: Number(event.target.value) })} /></label><output>{sceneMusicVolume(scene.music_volume)}%</output></div>
     {error && <div className="error-banner">{error}</div>}
     <CandidateGrid candidates={scene.candidates} selected={scene.selected_candidate_id} onSelect={(id) => onChange({ ...scene, selected_candidate_id: id })} emptyLabel="이 장면의 이미지를 업로드하거나 생성해 보세요" />
@@ -467,6 +472,7 @@ function CandidateGrid({ candidates, selected, onSelect, emptyLabel }: { candida
 
 function Complete({ project, onDownload }: { project: ProjectData; onDownload: () => void }) {
   const sceneDone = project.scenes.filter((scene) => scene.selected_candidate_id).length;
+  const narrationDone = project.scenes.filter((scene) => scene.narration_audio).length;
   const [video, setVideo] = useState<Blob | null>(null);
   const [rendering, setRendering] = useState(false);
   const [percent, setPercent] = useState(0);
@@ -502,13 +508,13 @@ function Complete({ project, onDownload }: { project: ProjectData; onDownload: (
     <div className="complete-mark"><Check size={42} /></div>
     <div className="eyebrow">VIDEO EXPORT</div>
     <h2>{project.person} 편 영상 만들기</h2>
-    <p>첫 장면 이미지를 배경으로 한 3초 타이틀 뒤에 장면의 메인·보조 이미지와 자막{project.background_music ? "·배경음악" : ""}이 이어지고, 마지막에는 썸네일 배경의 인물 이름 화면이 나옵니다. 내레이션 음성은 포함되지 않습니다.</p>
-    <div className="summary-cards"><div><span>회차</span><strong>{String(project.episode).padStart(3, "0")}</strong></div><div><span>선택 장면</span><strong>{sceneDone}/{project.scenes.length}</strong></div><div><span>영상 길이</span><strong>{duration ? `${duration}초` : "이미지 확인"}</strong></div></div>
-    <div className="folder-tree"><FolderOpen size={22} /><div><strong>{project.project_path}</strong><small>완성 MP4: 05_exports/{project.folder_name}.mp4 · 1280×720 · {project.background_music ? "배경음악 포함" : "무음"}</small></div></div>
+    <p>3초 타이틀 뒤에 장면 이미지·자막{narrationDone ? "·녹음한 내레이션" : ""}{project.background_music ? "·배경음악" : ""}이 이어지고, 마지막에는 썸네일 배경의 인물 이름 화면이 나옵니다. 녹음하지 않은 장면은 음성 없이 재생됩니다.</p>
+    <div className="summary-cards"><div><span>회차</span><strong>{String(project.episode).padStart(3, "0")}</strong></div><div><span>선택 장면</span><strong>{sceneDone}/{project.scenes.length}</strong></div><div><span>녹음 장면</span><strong>{narrationDone}/{project.scenes.length}</strong></div><div><span>영상 길이</span><strong>{duration ? `${duration}초` : "이미지 확인"}</strong></div></div>
+    <div className="folder-tree"><FolderOpen size={22} /><div><strong>{project.project_path}</strong><small>완성 MP4: 05_exports/{project.folder_name}.mp4 · 1280×720 · {narrationDone ? "내레이션" : "내레이션 없음"}{project.background_music ? " + 배경음악" : ""}</small></div></div>
     <div className="video-actions"><button className="btn primary export-button" disabled={rendering} onClick={makeVideo}>{rendering ? <LoaderCircle className="spin" size={17} /> : <Download size={17} />}{rendering ? `MP4 만드는 중… ${percent}%` : video ? "MP4 다시 만들기" : "MP4 만들기"}</button>{video && <><button className="btn ghost export-button" onClick={() => downloadBlob(video, `${project.folder_name}.mp4`)}><Download size={17} /> MP4 다시 다운로드</button>{!isTauri() && <button className="btn ghost export-button" onClick={onDownload}><Download size={17} /> MP4 포함 ZIP 다운로드</button>}</>}</div>
     {rendering && <div className="render-progress"><i style={{ width: `${percent}%` }} /></div>}
     {error && <div className="error-banner">{error}</div>}
-    {video && <p className="video-ready"><CheckCircle2 size={17} /> MP4가 완성되었습니다. 자막·이미지·효과·음악을 수정하면 다시 만들어 주세요.</p>}
+    {video && <p className="video-ready"><CheckCircle2 size={17} /> MP4가 완성되었습니다. 자막·이미지·효과·녹음·음악을 수정하면 다시 만들어 주세요.</p>}
     {previewUrl && <video className="video-preview" aria-label="완성 MP4 미리보기" src={previewUrl} controls playsInline />}
     <div className="ending"><span>엔딩 메시지</span><p>“{project.ending_message || "아직 엔딩 메시지가 없습니다."}”</p></div>
   </div>;
