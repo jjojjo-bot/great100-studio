@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openDB } from "idb";
 import JSZip from "jszip";
+import { MAX_MUSIC_BYTES, MAX_MUSIC_SECONDS } from "./music-limits";
 import { composeScenePrompt, composeThumbnailPrompt, withFullImagePrompts } from "./prompts";
 import type { BackgroundMusic, GenerateRequest, ImageCandidate, ProjectData, VisualAsset } from "./types";
 
@@ -67,14 +68,18 @@ const MUSIC_FORMATS: Record<string, { extension: string; mime: string }> = {
   mp3: { extension: "mp3", mime: "audio/mpeg" },
   wav: { extension: "wav", mime: "audio/wav" },
   m4a: { extension: "m4a", mime: "audio/mp4" },
+  mp4: { extension: "mp4", mime: "video/mp4" },
 };
 
 export function detectMusicFormat(file: Pick<File, "name" | "type" | "size">): { extension: string; mime: string } {
-  if (!file.size || file.size > 20_000_000) throw new Error("배경음악은 20MB 이하 파일만 사용할 수 있습니다.");
+  if (!file.size || file.size > MAX_MUSIC_BYTES) throw new Error("배경음악은 100MB 이하 파일만 사용할 수 있습니다.");
   const extension = file.name.split(".").at(-1)?.toLowerCase() || "";
   const format = MUSIC_FORMATS[extension];
-  if (!format) throw new Error("MP3, WAV, M4A 배경음악만 사용할 수 있습니다.");
-  if (file.type && ![format.mime, ...(extension === "wav" ? ["audio/x-wav", "audio/wave"] : extension === "m4a" ? ["audio/x-m4a", "audio/aac"] : ["audio/mp3"])].includes(file.type)) {
+  if (!format) throw new Error("MP3, WAV, M4A, MP4(MPEG-4) 배경음악만 사용할 수 있습니다.");
+  const alternativeTypes = extension === "wav" ? ["audio/x-wav", "audio/wave"]
+    : extension === "m4a" ? ["audio/x-m4a", "audio/aac"]
+      : extension === "mp4" ? ["audio/mp4", "application/mp4"] : ["audio/mp3"];
+  if (file.type && ![format.mime, ...alternativeTypes].includes(file.type)) {
     throw new Error("파일 확장자와 오디오 형식이 맞지 않습니다.");
   }
   return format;
@@ -82,13 +87,15 @@ export function detectMusicFormat(file: Pick<File, "name" | "type" | "size">): {
 
 export async function saveBackgroundMusic(project: ProjectData, file: File): Promise<BackgroundMusic> {
   const format = detectMusicFormat(file);
-  const data = await file.arrayBuffer();
-  const audioContext = new AudioContext();
   let duration = 0;
-  try { duration = (await audioContext.decodeAudioData(data.slice(0))).duration; }
-  catch { throw new Error("음악 파일을 재생할 수 없습니다. 다른 MP3, WAV 또는 M4A 파일을 선택해 주세요."); }
-  finally { await audioContext.close(); }
-  if (!Number.isFinite(duration) || duration <= 0 || duration > 600) throw new Error("배경음악은 10분 이하 파일만 사용할 수 있습니다. 짧은 음악은 영상 길이만큼 반복됩니다.");
+  if (format.extension === "mp4") duration = await (await import("./music")).inspectMpeg4Audio(file);
+  else {
+    const audioContext = new AudioContext();
+    try { duration = (await audioContext.decodeAudioData(await file.arrayBuffer())).duration; }
+    catch { throw new Error("음악 파일을 재생할 수 없습니다. 다른 MP3, WAV, M4A 또는 MP4 파일을 선택해 주세요."); }
+    finally { await audioContext.close(); }
+  }
+  if (!Number.isFinite(duration) || duration <= 0 || duration > MAX_MUSIC_SECONDS) throw new Error("배경음악은 15분 이하 파일만 사용할 수 있습니다. 짧은 음악은 영상 길이만큼 반복됩니다.");
   const music = { name: file.name, mime_type: format.mime, path: `${project.project_path}/01_source/background_music.${format.extension}` };
   if (isTauri()) {
     const dataUrl = await new Promise<string>((resolve, reject) => {
@@ -100,7 +107,7 @@ export async function saveBackgroundMusic(project: ProjectData, file: File): Pro
     await invoke("save_background_music", { projectPath: project.project_path, mimeType: format.mime, dataUrl: `data:${format.mime};base64,${dataUrl.slice(dataUrl.indexOf(",") + 1)}` });
   } else {
     const db = await database();
-    await db.put("audio", { id: project.id, blob: new Blob([data], { type: format.mime }) });
+    await db.put("audio", { id: project.id, blob: file });
   }
   return music;
 }

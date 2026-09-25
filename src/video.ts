@@ -197,7 +197,11 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
     const musicBlob = await getBackgroundMusic(project);
     if (!musicBlob) throw new Error("배경음악 파일을 찾지 못했습니다. 다시 업로드해 주세요.");
     audioContext = new AudioContext();
-    try { decodedMusic = await audioContext.decodeAudioData(await musicBlob.arrayBuffer()); }
+    try {
+      decodedMusic = project.background_music.mime_type === "video/mp4"
+        ? await (await import("./music")).decodeMpeg4Audio(musicBlob, audioContext)
+        : await audioContext.decodeAudioData(await musicBlob.arrayBuffer());
+    }
     catch { await audioContext.close(); throw new Error("배경음악을 읽지 못했습니다. 다른 파일로 다시 업로드해 주세요."); }
     if (!decodedMusic.length || !(await canEncodeAudio("aac", { numberOfChannels: Math.min(2, decodedMusic.numberOfChannels), sampleRate: decodedMusic.sampleRate }))) {
       await audioContext.close();

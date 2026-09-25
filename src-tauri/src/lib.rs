@@ -273,7 +273,8 @@ fn music_extension(mime_type: &str) -> Result<&'static str, String> {
         "audio/mpeg" => Ok("mp3"),
         "audio/wav" => Ok("wav"),
         "audio/mp4" => Ok("m4a"),
-        _ => Err("MP3, WAV, M4A 배경음악만 사용할 수 있습니다.".into()),
+        "video/mp4" => Ok("mp4"),
+        _ => Err("MP3, WAV, M4A, MP4 배경음악만 사용할 수 있습니다.".into()),
     }
 }
 
@@ -305,23 +306,23 @@ fn save_background_music(project_path: String, mime_type: String, data_url: Stri
     let extension = music_extension(&mime_type)?;
     let dir = music_dir(&project_path)?;
     let (_, encoded) = data_url.split_once(',').ok_or("음악 데이터 형식이 올바르지 않습니다.")?;
-    if !data_url.starts_with("data:audio/") || encoded.len() > 27_000_000 {
-        return Err("20MB 이하 오디오 파일만 사용할 수 있습니다.".into());
+    if !data_url.starts_with(&format!("data:{mime_type};base64,")) || encoded.len() > 134_000_000 {
+        return Err("100MB 이하 오디오 파일만 사용할 수 있습니다.".into());
     }
     let bytes = STANDARD.decode(encoded).map_err(|error| error.to_string())?;
-    if bytes.is_empty() || bytes.len() > 20_000_000 {
-        return Err("20MB 이하 오디오 파일만 사용할 수 있습니다.".into());
+    if bytes.is_empty() || bytes.len() > 100_000_000 {
+        return Err("100MB 이하 오디오 파일만 사용할 수 있습니다.".into());
     }
     let valid = match extension {
         "mp3" => bytes.starts_with(b"ID3") || (bytes.len() > 1 && bytes[0] == 0xff && bytes[1] & 0xe0 == 0xe0),
         "wav" => bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(&b"WAVE"[..]),
-        "m4a" => bytes.get(4..8) == Some(&b"ftyp"[..]),
+        "m4a" | "mp4" => bytes.get(4..8) == Some(&b"ftyp"[..]),
         _ => false,
     };
     if !valid { return Err("음악 파일 내용이 올바르지 않습니다.".into()); }
     let path = checked_music_path(&dir, extension)?;
     fs::write(&path, bytes).map_err(|error| error.to_string())?;
-    for old_extension in ["mp3", "wav", "m4a"] {
+    for old_extension in ["mp3", "wav", "m4a", "mp4"] {
         if old_extension != extension {
             let old = checked_music_path(&dir, old_extension)?;
             if old.is_file() { fs::remove_file(old).map_err(|error| error.to_string())?; }
@@ -335,14 +336,14 @@ fn read_background_music(project_path: String, mime_type: String) -> Result<Stri
     let extension = music_extension(&mime_type)?;
     let path = checked_music_path(&music_dir(&project_path)?, extension)?;
     let bytes = fs::read(path).map_err(|error| error.to_string())?;
-    if bytes.len() > 20_000_000 { return Err("배경음악 파일이 너무 큽니다.".into()); }
+    if bytes.len() > 100_000_000 { return Err("배경음악 파일이 너무 큽니다.".into()); }
     Ok(STANDARD.encode(bytes))
 }
 
 #[tauri::command]
 fn remove_background_music(project_path: String) -> Result<(), String> {
     let dir = music_dir(&project_path)?;
-    for extension in ["mp3", "wav", "m4a"] {
+    for extension in ["mp3", "wav", "m4a", "mp4"] {
         let path = checked_music_path(&dir, extension)?;
         if path.is_file() { fs::remove_file(path).map_err(|error| error.to_string())?; }
     }

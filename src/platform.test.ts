@@ -84,7 +84,8 @@ describe("background music storage", () => {
     expect(detectMusicFormat({ name: "music.mp3", type: "audio/mpeg", size: 100 }).extension).toBe("mp3");
     expect(detectMusicFormat({ name: "music.wav", type: "audio/x-wav", size: 100 }).extension).toBe("wav");
     expect(detectMusicFormat({ name: "music.m4a", type: "audio/mp4", size: 100 }).extension).toBe("m4a");
-    expect(() => detectMusicFormat({ name: "music.mp3", type: "audio/mpeg", size: 20_000_001 })).toThrow("20MB");
+    expect(detectMusicFormat({ name: "music.mp4", type: "video/mp4", size: 100_000_000 }).extension).toBe("mp4");
+    expect(() => detectMusicFormat({ name: "music.mp3", type: "audio/mpeg", size: 100_000_001 })).toThrow("100MB");
   });
 
   it("stores the uploaded file separately, includes it in ZIP, and removes it cleanly", async () => {
