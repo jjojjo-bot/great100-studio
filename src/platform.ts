@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openDB } from "idb";
 import JSZip from "jszip";
+import { composeScenePrompt, withFullScenePrompts } from "./prompts";
 import type { GenerateRequest, ImageCandidate, ProjectData, VisualAsset } from "./types";
 
 export const isTauri = () => "__TAURI_INTERNALS__" in window;
@@ -43,9 +44,10 @@ export async function createProjectOnDisk(project: ProjectData): Promise<string>
 }
 
 export async function saveProject(project: ProjectData): Promise<void> {
-  if (isTauri()) return invoke("save_project", { project });
+  const complete = withFullScenePrompts(project);
+  if (isTauri()) return invoke("save_project", { project: complete });
   const db = await database();
-  await db.put("projects", project);
+  await db.put("projects", complete);
 }
 
 export async function deleteProject(project: ProjectData): Promise<string | undefined> {
@@ -174,11 +176,14 @@ export async function buildProjectZip(project: ProjectData, video?: Blob): Promi
   const root = zip.folder(project.folder_name)!;
   for (const folder of ["01_source", "02_character", "03_images", "04_thumbnail", "05_exports", "06_logs"]) root.folder(folder);
   root.file("01_source/work_result.txt", project.source_text);
-  const withoutPreviews = structuredClone(project);
+  const withoutPreviews = structuredClone(withFullScenePrompts(project));
   for (const asset of [withoutPreviews.anchor, withoutPreviews.thumbnail, ...withoutPreviews.scenes]) {
     asset.candidates = asset.candidates.map(({ preview_url: _preview, ...candidate }) => ({ ...candidate, preview_url: "" }));
   }
   root.file("project_data.json", JSON.stringify(withoutPreviews, null, 2));
+  for (const scene of project.scenes) {
+    root.file(`03_images/scene${String(scene.number).padStart(2, "0")}/image_prompt.txt`, composeScenePrompt(project, scene));
+  }
   if (video) root.file(`05_exports/${project.folder_name}.mp4`, video);
   const promptHistory = [
     ...historyLines("anchor", project.anchor),

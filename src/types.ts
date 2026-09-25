@@ -20,6 +20,7 @@ export interface Scene {
   duration?: number;
   caption?: string;
   prompt: string;
+  full_prompt?: string;
   prompt_history: PromptRevision[];
   candidates: ImageCandidate[];
   selected_candidate_id?: string;

@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Circle,
   Clock3,
+  Copy,
   Download,
   FolderOpen,
   Image as ImageIcon,
@@ -20,6 +21,7 @@ import {
   WandSparkles,
 } from "lucide-react";
 import { createProjectDraft, DEFAULT_STYLE, parseWorkText } from "./parser";
+import { composeScenePrompt } from "./prompts";
 import { createProjectOnDisk, deleteProject, downloadBlob, exportProjectZip, generateImages, getAccessCode, getRenderedVideo, importImageCandidates, isTauri, listProjects, saveProject, saveRenderedVideo, setAccessCode } from "./platform";
 import { buildVideoPlan, renderProjectMp4 } from "./video";
 import { SAMPLE_WORK_TEXT } from "./sample";
@@ -226,7 +228,7 @@ function ParseReview({ project, onChange, onReparse }: { project: ProjectData; o
     <PageHeading eyebrow="PARSE REVIEW" title="제작안을 이렇게 이해했어요" text="Work 답변의 형식이 달라도 여기서 장면을 직접 추가하거나 수정할 수 있어요." />
     <div className="review-grid">
       <div className="panel"><h3>인물 프로필</h3><textarea className="profile-box" value={project.character_profile.description} onChange={(e) => set({ character_profile: { ...project.character_profile, description: e.target.value } })} /><label className="full-label">공통 스타일<textarea value={project.style_guide} onChange={(e) => set({ style_guide: e.target.value })} /></label></div>
-      <div className="panel scenes-summary"><div className="panel-title"><h3>찾은 장면</h3><span>{project.scenes.length} SCENES</span></div>{!project.scenes.length && <p className="parse-warning">장면을 자동으로 찾지 못했습니다. 원문을 다시 분석하거나 아래에서 직접 장면을 추가해 주세요.</p>}{project.scenes.map((scene) => <div className="scene-review-item" key={scene.id}><div className="scene-row"><b>{String(scene.number).padStart(2, "0")}</b><div><strong>{scene.title}</strong><small>{scene.prompt ? `${scene.prompt.slice(0, 88)}${scene.prompt.length > 88 ? "…" : ""}` : "이미지 프롬프트를 입력해 주세요"}</small></div>{scene.duration && <span><Clock3 size={13} /> {scene.duration}초</span>}</div><details className="scene-edit"><summary>장면 수정</summary><div className="scene-edit-fields"><label>제목<input aria-label={`장면 ${scene.number} 제목`} value={scene.title} onChange={(event) => editScene(scene.id, { title: event.target.value })} /></label><label>시간 (초)<input aria-label={`장면 ${scene.number} 시간`} type="number" min="1" max="120" value={scene.duration ?? 10} onChange={(event) => editScene(scene.id, { duration: Number(event.target.value) })} /></label><label className="wide">이미지 프롬프트<textarea aria-label={`장면 ${scene.number} 이미지 프롬프트`} value={scene.prompt} onChange={(event) => editScene(scene.id, { prompt: event.target.value })} /></label><label className="wide">영상 자막<textarea aria-label={`장면 ${scene.number} 영상 자막`} value={scene.caption ?? ""} onChange={(event) => editScene(scene.id, { caption: event.target.value })} /></label><button className="text-button danger" onClick={() => removeScene(scene.id)}>이 장면 삭제</button></div></details></div>)}<button className="btn ghost add-scene" onClick={addScene}><Plus size={16} /> 장면 직접 추가</button>{project.scenes.some((scene) => !scene.prompt.trim()) && <p className="parse-warning">빈 이미지 프롬프트를 입력하면 다음 단계로 진행할 수 있습니다.</p>}</div>
+      <div className="panel scenes-summary"><div className="panel-title"><h3>찾은 장면</h3><span>{project.scenes.length} SCENES</span></div>{!project.scenes.length && <p className="parse-warning">장면을 자동으로 찾지 못했습니다. 원문을 다시 분석하거나 아래에서 직접 장면을 추가해 주세요.</p>}{project.scenes.map((scene) => <div className="scene-review-item" key={scene.id}><div className="scene-row"><b>{String(scene.number).padStart(2, "0")}</b><div><strong>{scene.title}</strong><small>{scene.prompt ? `${scene.prompt.slice(0, 88)}${scene.prompt.length > 88 ? "…" : ""}` : "장면 내용을 입력해 주세요"}</small></div>{scene.duration && <span><Clock3 size={13} /> {scene.duration}초</span>}</div><details className="scene-edit"><summary>장면 수정</summary><div className="scene-edit-fields"><label>제목<input aria-label={`장면 ${scene.number} 제목`} value={scene.title} onChange={(event) => editScene(scene.id, { title: event.target.value })} /></label><label>시간 (초)<input aria-label={`장면 ${scene.number} 시간`} type="number" min="1" max="120" value={scene.duration ?? 10} onChange={(event) => editScene(scene.id, { duration: Number(event.target.value) })} /></label><label className="wide">장면별 이미지 내용 (전체 프롬프트는 Scene 검토에서 자동 완성)<textarea aria-label={`장면 ${scene.number} 이미지 내용`} value={scene.prompt} onChange={(event) => editScene(scene.id, { prompt: event.target.value })} /></label><label className="wide">영상 자막<textarea aria-label={`장면 ${scene.number} 영상 자막`} value={scene.caption ?? ""} onChange={(event) => editScene(scene.id, { caption: event.target.value })} /></label><button className="text-button danger" onClick={() => removeScene(scene.id)}>이 장면 삭제</button></div></details></div>)}<button className="btn ghost add-scene" onClick={addScene}><Plus size={16} /> 장면 직접 추가</button>{project.scenes.some((scene) => !scene.prompt.trim()) && <p className="parse-warning">빈 장면 내용을 입력하면 다음 단계로 진행할 수 있습니다.</p>}</div>
     </div>
     <button className="btn ghost" onClick={() => { if (!project.scenes.length || window.confirm("원문을 다시 분석하면 현재 장면 수정 내용이 바뀔 수 있습니다. 계속할까요?")) onReparse(); }}><RefreshCw size={16} /> 원문 다시 분석</button>
   </div>;
@@ -270,17 +272,23 @@ function SceneStudio({ project, onChange }: { project: ProjectData; onChange: (s
   const [active, setActive] = useState(project.scenes[0]?.id || "");
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [copied, setCopied] = useState(false);
   const scene = project.scenes.find((item) => item.id === active) || project.scenes[0];
   if (!scene) return <div className="empty-state"><Circle size={28} /><h3>분석된 장면이 없습니다</h3><p>파싱 확인 단계로 돌아가 Scene 항목을 확인해 주세요.</p></div>;
+  const fullPrompt = composeScenePrompt(project, scene);
   const generate = async () => {
     setError("");
+    if (!scene.prompt.trim()) return setError("장면 내용을 먼저 입력해 주세요.");
     onChange({ ...scene, status: "generating" });
     try {
-      const prompt = `${scene.prompt}\n\n인물 일관성: ${project.character_profile.description}\n공통 스타일: ${project.style_guide}`;
       const anchor = project.anchor.candidates.find((candidate) => candidate.id === project.anchor.selected_candidate_id);
-      const candidates = await generateImages({ project_path: project.project_path, asset_kind: "scene", scene_number: scene.number, prompt, count: 3, reference_image: anchor?.mode === "openai" ? anchor.preview_url : undefined });
-      onChange({ ...scene, candidates: [...scene.candidates, ...candidates], status: "ready", prompt_history: appendHistory(scene.prompt_history, scene.prompt) });
+      const candidates = await generateImages({ project_path: project.project_path, asset_kind: "scene", scene_number: scene.number, prompt: fullPrompt, count: 3, reference_image: anchor?.mode === "openai" ? anchor.preview_url : undefined });
+      onChange({ ...scene, candidates: [...scene.candidates, ...candidates], status: "ready", prompt_history: appendHistory(scene.prompt_history, fullPrompt) });
     } catch (cause) { setError(String(cause)); onChange({ ...scene, status: "error" }); }
+  };
+  const copyFullPrompt = async () => {
+    try { await navigator.clipboard.writeText(fullPrompt); setCopied(true); setError(""); }
+    catch { setError("복사에 실패했습니다. 아래 전체 프롬프트를 직접 선택해 복사해 주세요."); }
   };
   const upload = async (files: File[]) => {
     setError("");
@@ -293,18 +301,19 @@ function SceneStudio({ project, onChange }: { project: ProjectData; onChange: (s
   };
   return <div className="page scene-page">
     <PageHeading eyebrow="SCENE REVIEW" title="장면을 만들고 고르세요" text="프롬프트를 다듬고 각 장면의 최종 이미지를 하나씩 선택합니다." />
-    <div className="scene-tabs">{project.scenes.map((item) => <button key={item.id} className={item.id === scene.id ? "active" : ""} onClick={() => setActive(item.id)}><span>{item.selected_candidate_id ? <Check size={13} /> : item.number}</span>{item.title}</button>)}</div>
+    <div className="scene-tabs">{project.scenes.map((item) => <button key={item.id} className={item.id === scene.id ? "active" : ""} onClick={() => { setActive(item.id); setCopied(false); }}><span>{item.selected_candidate_id ? <Check size={13} /> : item.number}</span>{item.title}</button>)}</div>
     <div className="scene-title"><div><span>SCENE {String(scene.number).padStart(2, "0")}</span><h3>{scene.title}</h3></div></div>
-    <PromptEditor value={scene.prompt} historyCount={scene.prompt_history.length} onChange={(prompt) => onChange({ ...scene, prompt })} onGenerate={generate} onUpload={upload} generating={scene.status === "generating"} uploading={uploading} />
+    <PromptEditor heading="장면 내용 (수정 가능)" value={scene.prompt} historyCount={scene.prompt_history.length} onChange={(prompt) => { setCopied(false); onChange({ ...scene, prompt }); }} onGenerate={generate} onUpload={upload} generating={scene.status === "generating"} uploading={uploading} />
+    <div className="panel full-prompt-panel"><div className="full-prompt-head"><div><strong>복사용 전체 이미지 프롬프트</strong><small>장면 내용 + 인물 외형 기준 + 공통 스타일이 항상 함께 들어갑니다.</small></div><button className="btn ghost" disabled={!scene.prompt.trim()} onClick={copyFullPrompt}>{copied ? <Check size={16} /> : <Copy size={16} />}{copied ? "복사됨" : "전체 프롬프트 복사"}</button></div><textarea aria-label="복사용 전체 이미지 프롬프트" readOnly value={fullPrompt} /></div>
     <div className="panel caption-panel"><label><strong>영상 자막</strong><small>이 문장이 장면 이미지 위에 표시됩니다.</small><textarea aria-label="영상 자막" value={scene.caption ?? scene.title} onChange={(event) => onChange({ ...scene, caption: event.target.value })} /></label><label className="duration-label"><strong>표시 시간 (초)</strong><input aria-label="장면 표시 시간" type="number" min="1" max="120" step="1" value={scene.duration ?? 10} onChange={(event) => onChange({ ...scene, duration: Number(event.target.value) })} /></label></div>
     {error && <div className="error-banner">{error}</div>}
     <CandidateGrid candidates={scene.candidates} selected={scene.selected_candidate_id} onSelect={(id) => onChange({ ...scene, selected_candidate_id: id })} emptyLabel="이 장면의 이미지를 업로드하거나 생성해 보세요" />
   </div>;
 }
 
-function PromptEditor({ value, historyCount, onChange, onGenerate, onUpload, generating, uploading }: { value: string; historyCount: number; onChange: (value: string) => void; onGenerate: () => void; onUpload: (files: File[]) => void; generating: boolean; uploading: boolean }) {
+function PromptEditor({ heading = "이미지 프롬프트", value, historyCount, onChange, onGenerate, onUpload, generating, uploading }: { heading?: string; value: string; historyCount: number; onChange: (value: string) => void; onGenerate: () => void; onUpload: (files: File[]) => void; generating: boolean; uploading: boolean }) {
   const input = useRef<HTMLInputElement>(null);
-  return <div className="panel prompt-panel"><div className="prompt-head"><div><strong>이미지 프롬프트</strong><small>수정 이력 {historyCount}개</small></div><div className="prompt-actions"><input ref={input} className="file-input" type="file" accept="image/png,image/jpeg,image/webp" multiple aria-label="후보 이미지 파일 선택" onChange={(event) => { const files = Array.from(event.target.files || []); event.target.value = ""; if (files.length) onUpload(files); }} /><button className="btn ghost" disabled={generating || uploading} onClick={() => input.current?.click()}>{uploading ? <LoaderCircle className="spin" size={17} /> : <Upload size={17} />}{uploading ? "업로드 중…" : "이미지 업로드"}</button><button className="btn primary" disabled={generating || uploading} onClick={onGenerate}>{generating ? <LoaderCircle className="spin" size={17} /> : <WandSparkles size={17} />}{generating ? "생성 중…" : "후보 3장 생성"}</button></div></div><textarea value={value} onChange={(e) => onChange(e.target.value)} /><p className="upload-hint">ChatGPT Plus에서 만든 PNG·JPEG·WebP를 업로드할 수 있어요. 최대 6장, 각 12MB.</p></div>;
+  return <div className="panel prompt-panel"><div className="prompt-head"><div><strong>{heading}</strong><small>수정 이력 {historyCount}개</small></div><div className="prompt-actions"><input ref={input} className="file-input" type="file" accept="image/png,image/jpeg,image/webp" multiple aria-label="후보 이미지 파일 선택" onChange={(event) => { const files = Array.from(event.target.files || []); event.target.value = ""; if (files.length) onUpload(files); }} /><button className="btn ghost" disabled={generating || uploading} onClick={() => input.current?.click()}>{uploading ? <LoaderCircle className="spin" size={17} /> : <Upload size={17} />}{uploading ? "업로드 중…" : "이미지 업로드"}</button><button className="btn primary" disabled={generating || uploading} onClick={onGenerate}>{generating ? <LoaderCircle className="spin" size={17} /> : <WandSparkles size={17} />}{generating ? "생성 중…" : "후보 3장 생성"}</button></div></div><textarea value={value} onChange={(e) => onChange(e.target.value)} /><p className="upload-hint">ChatGPT Plus에서 만든 PNG·JPEG·WebP를 업로드할 수 있어요. 최대 6장, 각 12MB.</p></div>;
 }
 
 function CandidateGrid({ candidates, selected, onSelect, emptyLabel }: { candidates: ImageCandidate[]; selected?: string; onSelect: (id: string) => void; emptyLabel: string }) {

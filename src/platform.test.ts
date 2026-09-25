@@ -18,8 +18,12 @@ describe("project export", () => {
     expect(zip.file(`${folder}02_character/candidate_one.svg`)).not.toBeNull();
     expect(zip.file(`${folder}02_character/selected.svg`)).not.toBeNull();
     expect(zip.file(`${folder}06_logs/prompt_history.jsonl`)).not.toBeNull();
+    const fullPrompt = await zip.file(`${folder}03_images/scene01/image_prompt.txt`)!.async("string");
+    expect(fullPrompt).toContain(project.character_profile.description);
+    expect(fullPrompt).toContain(project.style_guide);
     const metadata = JSON.parse(await zip.file(`${folder}project_data.json`)!.async("string"));
     expect(metadata.anchor.candidates[0].preview_url).toBe("");
+    expect(metadata.scenes[0].full_prompt).toBe(fullPrompt);
   });
 
   it("includes an uploaded selection in the standard folder", async () => {
@@ -88,6 +92,19 @@ describe("project deletion", () => {
     expect(remaining.some((item) => item.id === removed.id)).toBe(false);
     expect(remaining.some((item) => item.id === kept.id)).toBe(true);
     expect(await getRenderedVideo(removed)).toBeNull();
+  });
+});
+
+describe("project prompt persistence", () => {
+  it("stores a complete prompt for every scene", async () => {
+    vi.stubGlobal("window", {});
+    const project = createProjectDraft(23, "프롬프트 시험", "장군 · 지도자", SAMPLE_WORK_TEXT);
+    project.project_path = await createProjectOnDisk(project);
+    await saveProject(project);
+    const saved = (await listProjects()).find((item) => item.id === project.id)!;
+    expect(saved.scenes).toHaveLength(project.scenes.length);
+    expect(saved.scenes[0].full_prompt).toContain(saved.character_profile.description);
+    expect(saved.scenes[0].full_prompt).toContain(saved.style_guide);
   });
 });
 
