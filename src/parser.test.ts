@@ -20,4 +20,9 @@ describe("Work 제작안 파서", () => {
     expect(draft.folder_name).toBe("007_세종_대왕");
     expect(draft.style_guide).toContain("16:9");
   });
+
+  it("Work 제작안의 자막 문구를 장면 자막으로 가져온다", () => {
+    const result = parseWorkText("인물명: 세종\nScene 1 - 글자를 만들다\n자막: 누구나 쉽게 읽는 글자를 꿈꿨어요.\n프롬프트: 책상에서 연구하는 세종");
+    expect(result.scenes[0].caption).toBe("누구나 쉽게 읽는 글자를 꿈꿨어요.");
+  });
 });

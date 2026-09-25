@@ -211,6 +211,25 @@ fn import_image(request: ImportRequest) -> Result<ImageCandidate, String> {
     })
 }
 
+#[tauri::command]
+fn save_video(project_path: String, data_url: String) -> Result<String, String> {
+    let project_dir = safe_project_path(&project_path)?;
+    if !project_dir.join("project_data.json").is_file() {
+        return Err("프로젝트를 찾지 못했습니다.".into());
+    }
+    let encoded = data_url.strip_prefix("data:video/mp4;base64,").ok_or("MP4 데이터 형식이 올바르지 않습니다.")?;
+    if encoded.len() > 270_000_000 { return Err("MP4 파일은 200MB 이하만 저장할 수 있습니다.".into()); }
+    let bytes = STANDARD.decode(encoded).map_err(|error| error.to_string())?;
+    if bytes.len() < 12 || bytes.get(4..8) != Some(&b"ftyp"[..]) {
+        return Err("올바른 MP4 파일이 아닙니다.".into());
+    }
+    let folder = project_dir.file_name().and_then(|name| name.to_str()).ok_or("프로젝트 폴더명이 올바르지 않습니다.")?;
+    let path = project_dir.join("05_exports").join(format!("{folder}.mp4"));
+    fs::create_dir_all(path.parent().ok_or("내보내기 폴더가 없습니다.")?).map_err(|error| error.to_string())?;
+    fs::write(&path, bytes).map_err(|error| error.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 async fn generate_openai(
     api_key: &str,
     request: &GenerateRequest,
@@ -360,7 +379,8 @@ pub fn run() {
             list_projects,
             save_project,
             generate_images,
-            import_image
+            import_image,
+            save_video
         ])
         .run(tauri::generate_context!())
         .expect("error while running Great100 Studio");

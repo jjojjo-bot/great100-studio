@@ -18,6 +18,7 @@ export interface Scene {
   number: number;
   title: string;
   duration?: number;
+  caption?: string;
   prompt: string;
   prompt_history: PromptRevision[];
   candidates: ImageCandidate[];

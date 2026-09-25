@@ -31,6 +31,14 @@ describe("project export", () => {
     expect(zip.file(`${folder}candidate_uploaded.png`)).not.toBeNull();
     expect(zip.file(`${folder}selected.png`)).not.toBeNull();
   });
+
+  it("includes the finished MP4 inside 05_exports", async () => {
+    const project = createProjectDraft(2, "이순신", "장군 · 지도자", SAMPLE_WORK_TEXT);
+    project.project_path = `projects/${project.folder_name}`;
+    const video = new Blob([new Uint8Array([0, 0, 0, 12, 102, 116, 121, 112])], { type: "video/mp4" });
+    const zip = await JSZip.loadAsync(await (await buildProjectZip(project, video)).arrayBuffer());
+    expect(zip.file(`${project.folder_name}/05_exports/${project.folder_name}.mp4`)).not.toBeNull();
+  });
 });
 
 describe("uploaded image validation", () => {

@@ -5,9 +5,10 @@ import type { GenerateRequest, ImageCandidate, ProjectData, VisualAsset } from "
 
 export const isTauri = () => "__TAURI_INTERNALS__" in window;
 
-const database = () => openDB("great100-studio", 1, {
+const database = () => openDB("great100-studio", 2, {
   upgrade(db) {
-    db.createObjectStore("projects", { keyPath: "id" });
+    if (!db.objectStoreNames.contains("projects")) db.createObjectStore("projects", { keyPath: "id" });
+    if (!db.objectStoreNames.contains("videos")) db.createObjectStore("videos", { keyPath: "id" });
   },
 });
 
@@ -123,17 +124,40 @@ function candidatePath(request: ImageLocation, id: string, extension: string) {
   return `${request.project_path}/${folder}/candidate_${id}.${extension}`;
 }
 
-export async function exportProjectZip(project: ProjectData): Promise<void> {
-  const blob = await buildProjectZip(project);
+export function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `${project.folder_name}.zip`;
+  link.download = filename;
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
-export async function buildProjectZip(project: ProjectData): Promise<Blob> {
+export async function saveRenderedVideo(project: ProjectData, blob: Blob): Promise<void> {
+  if (isTauri()) {
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const chunkSize = 0x8000;
+    let binary = "";
+    for (let index = 0; index < bytes.length; index += chunkSize) binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+    await invoke("save_video", { projectPath: project.project_path, dataUrl: `data:video/mp4;base64,${btoa(binary)}` });
+  }
+  const db = await database();
+  await db.put("videos", { id: project.id, updated_at: project.updated_at, blob });
+}
+
+export async function getRenderedVideo(project: ProjectData): Promise<Blob | null> {
+  const db = await database();
+  const saved = await db.get("videos", project.id) as { updated_at: string; blob: Blob } | undefined;
+  return saved?.updated_at === project.updated_at ? saved.blob : null;
+}
+
+export async function exportProjectZip(project: ProjectData): Promise<void> {
+  const video = await getRenderedVideo(project);
+  if (!video) throw new Error("완성 단계에서 MP4를 먼저 만들어 주세요.");
+  downloadBlob(await buildProjectZip(project, video), `${project.folder_name}.zip`);
+}
+
+export async function buildProjectZip(project: ProjectData, video?: Blob): Promise<Blob> {
   const zip = new JSZip();
   const root = zip.folder(project.folder_name)!;
   for (const folder of ["01_source", "02_character", "03_images", "04_thumbnail", "05_exports", "06_logs"]) root.folder(folder);
@@ -143,6 +167,7 @@ export async function buildProjectZip(project: ProjectData): Promise<Blob> {
     asset.candidates = asset.candidates.map(({ preview_url: _preview, ...candidate }) => ({ ...candidate, preview_url: "" }));
   }
   root.file("project_data.json", JSON.stringify(withoutPreviews, null, 2));
+  if (video) root.file(`05_exports/${project.folder_name}.mp4`, video);
   const promptHistory = [
     ...historyLines("anchor", project.anchor),
     ...project.scenes.flatMap((scene) => historyLines(`scene${String(scene.number).padStart(2, "0")}`, scene)),

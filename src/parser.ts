@@ -52,11 +52,13 @@ export function parseWorkText(text: string): Pick<ProjectData, "person" | "chara
     const body = match[3].trim();
     const prompt = valueAfter(body, ["prompt", "이미지\\s*프롬프트", "프롬프트"]) || body;
     const durationRaw = valueAfter(body, ["duration", "시간", "길이"]);
+    const title = match[2].replace(/^[-—:：.]\s*/, "").trim() || `장면 ${number}`;
     scenes.push({
       id: `scene-${String(number).padStart(2, "0")}`,
       number,
-      title: match[2].replace(/^[-—:：.]\s*/, "").trim() || `장면 ${number}`,
+      title,
       duration: durationRaw ? Number(durationRaw.replace(/[^0-9.]/g, "")) || undefined : undefined,
+      caption: valueAfter(body, ["caption", "subtitle", "narration", "자막", "내레이션", "대사"]) || title,
       prompt,
       prompt_history: [{ prompt, created_at: new Date().toISOString() }],
       candidates: [],
