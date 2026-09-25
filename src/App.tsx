@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import "./v2.css";
 import {
   ArrowLeft,
   ArrowRight,
@@ -22,13 +23,14 @@ import {
   WandSparkles,
 } from "lucide-react";
 import { createProjectDraft, DEFAULT_STYLE, parseWorkText } from "./parser";
+import { completionErrors, createV2ProjectDraft, parseAppData, reportForProject } from "./app-data";
 import { composeScenePrompt, composeThumbnailPrompt } from "./prompts";
 import { createProjectOnDisk, deleteProject, downloadBlob, exportProjectZip, generateImages, getAccessCode, getBackgroundMusic, getRenderedVideo, importImageCandidates, isTauri, listProjects, removeBackgroundMusic, saveBackgroundMusic, saveProject, saveRenderedVideo, setAccessCode } from "./platform";
 import { buildVideoPlan, renderProjectMp4, sceneMusicVolume } from "./video";
 import { SAMPLE_WORK_TEXT } from "./sample";
 import type { ImageCandidate, ImageMotion, ProjectData, Scene, VisualAsset } from "./types";
 
-const STEPS = ["대시보드", "프로젝트", "파싱 확인", "기준 이미지", "Scene 검토", "썸네일", "완료"];
+const STEPS = ["대시보드", "프로젝트", "파싱 확인", "사전 점검", "기준 이미지", "Scene 검토", "썸네일", "전체 검토", "완료"];
 
 function App() {
   const [step, setStep] = useState(0);
@@ -36,6 +38,8 @@ function App() {
   const [person, setPerson] = useState("");
   const [category, setCategory] = useState("장군 · 지도자");
   const [source, setSource] = useState("");
+  const [legacyImport, setLegacyImport] = useState(false);
+  const [setupErrors, setSetupErrors] = useState<string[]>([]);
   const [project, setProject] = useState<ProjectData | null>(null);
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
@@ -53,7 +57,14 @@ function App() {
     if (!source.trim()) return setNotice("ChatGPT Work 결과를 붙여넣어 주세요.");
     setBusy(true);
     try {
-      const draft = createProjectDraft(episode, person, category, source);
+      let draft: ProjectData;
+      if (legacyImport) draft = createProjectDraft(episode, person, category, source);
+      else {
+        const { data, report } = parseAppData(source);
+        if (report.errors.length) { setSetupErrors(report.errors); return; }
+        draft = createV2ProjectDraft(episode, category, source, data, report);
+      }
+      setSetupErrors([]);
       const path = await createProjectOnDisk(draft);
       draft.project_path = path;
       await saveProject(draft);
@@ -63,14 +74,19 @@ function App() {
       setNotice(draft.scenes.length ? `${draft.scenes.length}개 장면을 찾았습니다.` : "");
       setStep(2);
     } catch (error) {
-      setNotice(`프로젝트 생성 실패: ${String(error)}`);
+      setSetupErrors([String(error)]);
     } finally {
       setBusy(false);
     }
   };
 
   const persist = async (next: ProjectData) => {
-    const updated = { ...next, updated_at: new Date().toISOString() };
+    const updated = { ...next, updated_at: new Date().toISOString(), app_state: next.schema_version === "2.0" ? {
+      selected_character_image: next.anchor.selected_candidate_id,
+      selected_scene_images: Object.fromEntries(next.scenes.filter((scene) => scene.selected_candidate_id).map((scene) => [scene.source_scene_id || scene.id, scene.selected_candidate_id!])),
+      selected_thumbnail: next.thumbnail.selected_candidate_id,
+      warnings: reportForProject(next).warnings,
+    } : next.app_state };
     setProject(updated);
     setProjects((items) => items.map((item) => item.id === updated.id ? updated : item));
     try { await saveProject(updated); }
@@ -105,6 +121,7 @@ function App() {
 
   const reparseSource = async () => {
     if (!project) return;
+    if (project.schema_version === "2.0") { setNotice("v2 원본은 자동 재분석하지 않습니다. 새 APP_DATA로 별도 프로젝트를 만들어 주세요."); return; }
     const parsed = parseWorkText(project.source_text);
     const anchorPrompt = `${parsed.character_profile.description || `${parsed.person}, 역사적 복식, 차분하고 믿음직한 표정`}. 전신 또는 반신 인물 기준 시트, 정면, 단순한 배경, 동일 인물 유지용.`;
     const anchor = project.anchor.candidates.length ? project.anchor : {
@@ -146,22 +163,24 @@ function App() {
           {notice && <div className="toast" onClick={() => setNotice("")}>{notice}</div>}
           {step === 0 && <Dashboard onStart={() => setStep(1)} projects={projects} accessCode={accessCode} onAccessCode={(code) => { updateAccessCode(code); setAccessCode(code); }} onOpen={(item) => { setProject(item); setStep(2); }} onDownload={download} onDelete={removeProject} deletingId={deletingId} />}
           {step === 1 && (
-            <ProjectSetup episode={episode} person={person} category={category} source={source} busy={busy}
+            <ProjectSetup episode={episode} person={person} category={category} source={source} busy={busy} legacyImport={legacyImport} setLegacyImport={setLegacyImport} errors={setupErrors}
               setEpisode={setEpisode} setPerson={setPerson} setCategory={setCategory} setSource={setSource}
               onSample={() => { setSource(SAMPLE_WORK_TEXT); setPerson("이순신"); setEpisode(2); }} onContinue={prepareProject} />
           )}
           {step === 2 && project && <ParseReview project={project} onChange={persist} onReparse={reparseSource} />}
-          {step === 3 && project && <AssetStudio title="인물 기준 이미지" eyebrow="CHARACTER ANCHOR" description="모든 장면에서 같은 얼굴과 복식을 유지할 기준 이미지를 고르세요." asset={project.anchor} project={project} kind="anchor" onChange={(anchor) => persist({ ...project, anchor })} />}
-          {step === 4 && project && <SceneStudio project={project} onChange={updateScene} onProjectChange={persist} />}
-          {step === 5 && project && <AssetStudio title="썸네일 만들기" eyebrow="THUMBNAIL" description="영상의 첫인상을 결정할 대표 이미지를 선택하세요. 썸네일은 ZIP에 보관되며 영상 본편에는 들어가지 않습니다." asset={project.thumbnail} project={project} kind="thumbnail" onChange={(thumbnail) => persist({ ...project, thumbnail })} />}
-          {step === 6 && project && <Complete project={project} onDownload={() => download(project)} />}
+          {step === 3 && project && <Preflight project={project} />}
+          {step === 4 && project && <AssetStudio title="인물 기준 이미지" eyebrow="CHARACTER ANCHOR" description="얼굴 일관성을 위한 기준 이미지입니다. 업로드한 이미지가 있으면 생성 단계를 건너뛰어도 됩니다." asset={project.anchor} project={project} kind="anchor" onChange={(anchor) => persist({ ...project, anchor })} />}
+          {step === 5 && project && <SceneStudio project={project} onChange={updateScene} onProjectChange={persist} />}
+          {step === 6 && project && <AssetStudio title="썸네일 만들기" eyebrow="THUMBNAIL" description="영상의 첫인상을 결정할 대표 이미지를 선택하세요. 썸네일은 ZIP에 보관되며 영상 본편에는 들어가지 않습니다." asset={project.thumbnail} project={project} kind="thumbnail" onChange={(thumbnail) => persist({ ...project, thumbnail })} />}
+          {step === 7 && project && <ImageReview project={project} />}
+          {step === 8 && project && <Complete project={project} onDownload={() => download(project)} />}
         </section>
 
         {step > 1 && project && (
           <footer className="bottom-bar">
             <button className="btn ghost" onClick={() => setStep((value) => Math.max(0, value - 1))}><ArrowLeft size={17} /> 이전</button>
             <span><Save size={15} /> 변경사항 자동 저장됨</span>
-            {step < 6 && <button className="btn primary" disabled={step === 2 && (!project.scenes.length || project.scenes.some((scene) => !scene.prompt.trim()))} onClick={() => setStep((value) => Math.min(6, value + 1))}>다음 단계 <ArrowRight size={17} /></button>}
+            {step < 8 && <button className="btn primary" disabled={(step === 2 && (!project.scenes.length || project.scenes.some((scene) => !scene.prompt.trim()))) || (step === 3 && reportForProject(project).errors.length > 0) || (step === 7 && completionErrors(project).length > 0)} onClick={() => setStep((value) => Math.min(8, value + 1))}>다음 단계 <ArrowRight size={17} /></button>}
           </footer>
         )}
       </main>
@@ -191,6 +210,7 @@ function Dashboard({ onStart, projects, accessCode, onAccessCode, onOpen, onDown
 
 interface SetupProps {
   episode: number; person: string; category: string; source: string; busy: boolean;
+  legacyImport: boolean; setLegacyImport: (value: boolean) => void; errors: string[];
   setEpisode: (value: number) => void; setPerson: (value: string) => void; setCategory: (value: string) => void; setSource: (value: string) => void;
   onSample: () => void; onContinue: () => void;
 }
@@ -204,15 +224,18 @@ function ProjectSetup(props: SetupProps) {
         <label><span>인물명</span><input placeholder="예: 이순신" value={props.person} onChange={(e) => props.setPerson(e.target.value)} /></label>
         <label><span>분야</span><select value={props.category} onChange={(e) => props.setCategory(e.target.value)}><option>장군 · 지도자</option><option>독립운동가</option><option>과학 · 발명</option><option>예술 · 문화</option><option>사상 · 교육</option></select></label>
       </div>
-      <div className="source-head"><div><strong>Work 제작안</strong><small>Scene, 인물 외형, 썸네일, 엔딩 메시지를 자동으로 찾아요.</small></div><button className="text-button" onClick={props.onSample}>이순신 예시 불러오기</button></div>
-      <textarea className="source-input" placeholder="ChatGPT Work 결과를 여기에 그대로 붙여넣으세요…" value={props.source} onChange={(e) => props.setSource(e.target.value)} />
+      <div className="source-head"><div><strong>{props.legacyImport ? "Legacy Markdown 제작안" : "APP_DATA v2 제작안"}</strong><small>{props.legacyImport ? "기존 자유형 제작안을 추정하여 읽습니다." : "Work 결과의 ## APP_DATA 아래 JSON만 정확히 읽습니다."}</small></div><button className="text-button" onClick={() => { props.setLegacyImport(!props.legacyImport); props.setSource(""); }}>{props.legacyImport ? "v2 APP_DATA 입력으로 전환" : "Legacy Import"}</button></div>
+      {props.legacyImport && <button className="text-button" onClick={props.onSample}>이순신 예시 불러오기</button>}
+      <textarea className="source-input" placeholder={props.legacyImport ? "기존 Markdown 제작안을 붙여넣으세요…" : "## APP_DATA\n```json\n{ ... }\n```"} value={props.source} onChange={(e) => props.setSource(e.target.value)} />
       <div className="style-note"><WandSparkles size={18} /><div><strong>공통 스타일 가이드</strong><p>{DEFAULT_STYLE}</p></div></div>
+      {props.errors.length > 0 && <div className="error-banner" role="alert"><strong>입력 확인이 필요합니다</strong><ul>{props.errors.map((error, index) => <li key={index}>{error}</li>)}</ul></div>}
       <button className="btn primary wide" disabled={props.busy} onClick={props.onContinue}>{props.busy ? <LoaderCircle className="spin" size={18} /> : <Sparkles size={18} />} 프로젝트 만들고 분석하기</button>
     </div>
   </div>;
 }
 
 function ParseReview({ project, onChange, onReparse }: { project: ProjectData; onChange: (value: ProjectData) => void; onReparse: () => void }) {
+  if (project.schema_version === "2.0") return <V2ParseReview project={project} />;
   const set = (patch: Partial<ProjectData>) => onChange({ ...project, ...patch });
   const editScene = (id: string, patch: Partial<Scene>) => set({ scenes: project.scenes.map((scene) => scene.id === id ? { ...scene, ...patch } : scene) });
   const addScene = () => {
@@ -232,6 +255,34 @@ function ParseReview({ project, onChange, onReparse }: { project: ProjectData; o
       <div className="panel scenes-summary"><div className="panel-title"><h3>찾은 장면</h3><span>{project.scenes.length} SCENES</span></div>{!project.scenes.length && <p className="parse-warning">장면을 자동으로 찾지 못했습니다. 원문을 다시 분석하거나 아래에서 직접 장면을 추가해 주세요.</p>}{project.scenes.map((scene) => <div className="scene-review-item" key={scene.id}><div className="scene-row"><b>{String(scene.number).padStart(2, "0")}</b><div><strong>{scene.title}</strong><small>{scene.prompt ? `${scene.prompt.slice(0, 88)}${scene.prompt.length > 88 ? "…" : ""}` : "장면 내용을 입력해 주세요"}</small></div>{scene.duration && <span><Clock3 size={13} /> {scene.duration}초</span>}</div><details className="scene-edit"><summary>장면 수정</summary><div className="scene-edit-fields"><label>제목<input aria-label={`장면 ${scene.number} 제목`} value={scene.title} onChange={(event) => editScene(scene.id, { title: event.target.value })} /></label><label>시간 (초)<input aria-label={`장면 ${scene.number} 시간`} type="number" min="1" max="120" value={scene.duration ?? 10} onChange={(event) => editScene(scene.id, { duration: Number(event.target.value) })} /></label><label className="wide">장면별 이미지 내용 (전체 프롬프트는 Scene 검토에서 자동 완성)<textarea aria-label={`장면 ${scene.number} 이미지 내용`} value={scene.prompt} onChange={(event) => editScene(scene.id, { prompt: event.target.value })} /></label><label className="wide">영상 자막<textarea aria-label={`장면 ${scene.number} 영상 자막`} value={scene.caption ?? ""} onChange={(event) => editScene(scene.id, { caption: event.target.value })} /></label><button className="text-button danger" onClick={() => removeScene(scene.id)}>이 장면 삭제</button></div></details></div>)}<button className="btn ghost add-scene" onClick={addScene}><Plus size={16} /> 장면 직접 추가</button>{project.scenes.some((scene) => !scene.prompt.trim()) && <p className="parse-warning">빈 장면 내용을 입력하면 다음 단계로 진행할 수 있습니다.</p>}</div>
     </div>
     <button className="btn ghost" onClick={() => { if (!project.scenes.length || window.confirm("원문을 다시 분석하면 현재 장면 수정 내용이 바뀔 수 있습니다. 계속할까요?")) onReparse(); }}><RefreshCw size={16} /> 원문 다시 분석</button>
+  </div>;
+}
+
+function V2ParseReview({ project }: { project: ProjectData }) {
+  return <div className="page"><PageHeading eyebrow="APP_DATA REVIEW" title="제작안의 장면을 확인하세요" text="원본 JSON은 변경하지 않고 보관합니다. 이미지 프롬프트와 자막은 다음 단계에서 앱 작업본으로 수정할 수 있습니다." />
+    <div className="panel"><h3>{project.person} · {project.source?.person.period}</h3><p>{project.source?.person.one_line_intro}</p><p>목표 {project.source?.video.target_duration_sec}초 · {project.scenes.length}개 Scene</p></div>
+    <div className="v2-scene-list">{project.scenes.map((scene) => <details className="panel v2-scene-card" key={scene.id}><summary><b>{scene.source_scene_id}</b> <span>{scene.start_sec}–{scene.end_sec}초</span> <strong>{scene.title}</strong>{project.source?.core_achievement.scene_id === scene.source_scene_id && <em>★ {project.source?.core_achievement.title}</em>}</summary><div className="scene-data-grid"><p><b>내레이션</b>{scene.narration}</p><p><b>장면 설명</b>{scene.scene_description}</p><p><b>화면 유형 / 구도 / 장소</b>{scene.visual_type} · {scene.shot_type} · {scene.location}</p><p><b>대상 / 행동</b>{scene.main_subject} · {scene.main_action}</p><p><b>이미지 프롬프트</b>{scene.prompt}</p><p><b>보조 이미지</b>{scene.support_image_prompt || "없음"}</p><p><b>자막 / 효과</b>{scene.caption} · {scene.motion}</p>{scene.overlay_required && <p><b>정확한 역사 자료 오버레이</b>{scene.overlay_type} · {scene.overlay_note}</p>}</div></details>)}</div>
+  </div>;
+}
+
+function Preflight({ project }: { project: ProjectData }) {
+  const report = reportForProject(project);
+  const metric = report.metrics;
+  return <div className="page"><PageHeading eyebrow="PREFLIGHT CHECK" title="제작 전 품질 점검" text="오류는 진행을 막고, 다양성·길이 경고는 확인 후 계속할 수 있습니다." />
+    <div className="panel"><h3>데이터와 영상</h3><div className="quality-metrics"><span>스키마 {report.errors.length ? "확인 필요" : "정상"}</span><span>Scene {metric.sceneCount}개</span><span>길이 {metric.duration}초</span><span>핵심 업적 Scene {metric.coreScenes}개</span></div></div>
+    {project.schema_version === "2.0" && <div className="panel"><h3>이미지 다양성</h3><div className="quality-metrics"><span>visual_type {metric.visualTypes}종 {metric.visualTypes >= 6 ? "✓" : "⚠"}</span><span>shot_type {metric.shotTypes}종 {metric.shotTypes >= 5 ? "✓" : "⚠"}</span><span>location {metric.locations}종 {metric.locations >= 4 ? "✓" : "⚠"}</span><span>주인공 미등장 {metric.withoutProtagonist}개 {metric.withoutProtagonist >= 3 ? "✓" : "⚠"}</span></div></div>}
+    {report.errors.length > 0 && <div className="error-banner"><strong>오류 · 다음 단계 진행 불가</strong><ul>{report.errors.map((item, index) => <li key={index}>{item}</li>)}</ul></div>}
+    {report.warnings.length > 0 && <div className="panel quality-warnings"><h3>확인할 경고 {report.warnings.length}개</h3><ul>{report.warnings.map((item, index) => <li key={index}>{item}</li>)}</ul></div>}
+    {!report.errors.length && <div className="video-ready"><CheckCircle2 size={17} /> 필수 데이터가 확인되었습니다. 이미지 제작을 시작할 수 있습니다.</div>}
+  </div>;
+}
+
+function ImageReview({ project }: { project: ProjectData }) {
+  const errors = completionErrors(project);
+  return <div className="page"><PageHeading eyebrow="FINAL IMAGE REVIEW" title="전체 이미지를 한 번 더 확인하세요" text="Scene 순서와 핵심 업적 장면, 썸네일을 검토한 뒤 MP4를 만듭니다." />
+    <div className="review-image-grid">{project.scenes.map((scene) => { const image = scene.candidates.find((candidate) => candidate.id === scene.selected_candidate_id); return <div className="panel review-image-card" key={scene.id}>{image ? <img src={image.preview_url} alt={`${scene.title} 선택 이미지`} /> : <div className="candidate-empty">이미지 미선택</div>}<strong>{scene.source_scene_id || `Scene ${scene.number}`} · {scene.title}</strong>{project.source?.core_achievement.scene_id === scene.source_scene_id && <em>★ 핵심 업적</em>}</div>; })}</div>
+    <div className="panel"><h3>썸네일</h3>{project.thumbnail.candidates.find((candidate) => candidate.id === project.thumbnail.selected_candidate_id) ? <img className="review-thumbnail" src={project.thumbnail.candidates.find((candidate) => candidate.id === project.thumbnail.selected_candidate_id)!.preview_url} alt="선택 썸네일" /> : <p>선택된 썸네일이 없습니다.</p>}</div>
+    {errors.length > 0 && <div className="error-banner"><strong>완료 전 확인할 항목</strong><ul>{errors.map((error, index) => <li key={index}>{error}</li>)}</ul></div>}
   </div>;
 }
 
@@ -322,6 +373,7 @@ function SceneStudio({ project, onChange, onProjectChange }: { project: ProjectD
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [supportBusy, setSupportBusy] = useState(false);
   const scene = project.scenes.find((item) => item.id === active) || project.scenes[0];
   if (!scene) return <div className="empty-state"><Circle size={28} /><h3>분석된 장면이 없습니다</h3><p>파싱 확인 단계로 돌아가 Scene 항목을 확인해 주세요.</p></div>;
   const fullPrompt = composeScenePrompt(project, scene);
@@ -331,7 +383,7 @@ function SceneStudio({ project, onChange, onProjectChange }: { project: ProjectD
     onChange({ ...scene, status: "generating" });
     try {
       const anchor = project.anchor.candidates.find((candidate) => candidate.id === project.anchor.selected_candidate_id);
-      const candidates = await generateImages({ project_path: project.project_path, asset_kind: "scene", scene_number: scene.number, prompt: fullPrompt, count: 3, reference_image: anchor?.mode === "openai" ? anchor.preview_url : undefined });
+      const candidates = await generateImages({ project_path: project.project_path, asset_kind: "scene", scene_number: scene.number, prompt: fullPrompt, count: project.schema_version === "2.0" ? 2 : 3, reference_image: anchor?.mode === "openai" ? anchor.preview_url : undefined });
       onChange({ ...scene, candidates: [...scene.candidates, ...candidates], status: "ready", prompt_history: appendHistory(scene.prompt_history, fullPrompt) });
     } catch (cause) { setError(String(cause)); onChange({ ...scene, status: "error" }); }
   };
@@ -348,23 +400,45 @@ function SceneStudio({ project, onChange, onProjectChange }: { project: ProjectD
     } catch (cause) { setError(String(cause)); }
     finally { setUploading(false); }
   };
+  const generateSupport = async () => {
+    if (!scene.support_image_prompt?.trim()) return;
+    setSupportBusy(true); setError("");
+    try {
+      const candidates = await generateImages({ project_path: project.project_path, asset_kind: "support", scene_number: scene.number, prompt: `${scene.support_image_prompt}\n\n${project.style_guide}\nno text, no letters, no captions, no watermark. 16:9.`, count: 2 });
+      onChange({ ...scene, support_candidates: [...(scene.support_candidates || []), ...candidates], support_prompt_history: appendHistory(scene.support_prompt_history || [], scene.support_image_prompt) });
+    } catch (cause) { setError(String(cause)); }
+    finally { setSupportBusy(false); }
+  };
+  const uploadSupport = async (files: File[]) => {
+    setSupportBusy(true); setError("");
+    try {
+      const candidates = await importImageCandidates(files, { project_path: project.project_path, asset_kind: "support", scene_number: scene.number });
+      onChange({ ...scene, support_candidates: [...(scene.support_candidates || []), ...candidates], support_selected_candidate_id: candidates.at(-1)?.id || scene.support_selected_candidate_id });
+    } catch (cause) { setError(String(cause)); }
+    finally { setSupportBusy(false); }
+  };
+  const position = project.scenes.findIndex((item) => item.id === scene.id);
+  const neighbors = [project.scenes[position - 1], project.scenes[position + 1]].filter((item): item is Scene => !!item);
   return <div className="page scene-page">
     <PageHeading eyebrow="SCENE REVIEW" title="장면을 만들고 고르세요" text="프롬프트를 다듬고 각 장면의 최종 이미지를 하나씩 선택합니다." />
     <BackgroundMusicPanel project={project} onChange={onProjectChange} />
     <div className="scene-tabs">{project.scenes.map((item) => <button key={item.id} className={item.id === scene.id ? "active" : ""} onClick={() => { setActive(item.id); setCopied(false); }}><span>{item.selected_candidate_id ? <Check size={13} /> : item.number}</span>{item.title}</button>)}</div>
     <div className="scene-title"><div><span>SCENE {String(scene.number).padStart(2, "0")}</span><h3>{scene.title}</h3></div></div>
-    <PromptEditor heading="장면 내용 (수정 가능)" value={scene.prompt} historyCount={scene.prompt_history.length} onChange={(prompt) => { setCopied(false); onChange({ ...scene, prompt }); }} onGenerate={generate} onUpload={upload} generating={scene.status === "generating"} uploading={uploading} />
+    {project.schema_version === "2.0" && <div className="panel scene-context"><div className="scene-context-head"><span>{scene.start_sec}–{scene.end_sec}초</span>{project.source?.core_achievement.scene_id === scene.source_scene_id && <em>★ 핵심 업적 · {project.source?.core_achievement.title}</em>}</div><p><b>내레이션</b> {scene.narration}</p><p><b>장면 설명</b> {scene.scene_description}</p><p><b>화면 구성</b> {scene.visual_type} · {scene.shot_type} · {scene.location}</p><p><b>대상과 행동</b> {scene.main_subject} · {scene.main_action}</p>{scene.overlay_required && <p><b>역사 자료 오버레이</b> {scene.overlay_type} · {scene.overlay_note}</p>}</div>}
+    {project.schema_version === "2.0" && <div className="panel neighbor-panel"><strong>인접 장면 비교</strong><div className="neighbor-grid">{neighbors.map((item) => { const image = item.candidates.find((candidate) => candidate.id === item.selected_candidate_id); return <div key={item.id}>{image ? <img src={image.preview_url} alt={`${item.title} 선택 이미지`} /> : <div className="neighbor-empty">아직 이미지 없음</div>}<small>{item.source_scene_id} · {item.title}</small></div>; })}</div></div>}
+    <PromptEditor heading="장면 내용 (수정 가능)" value={scene.prompt} historyCount={scene.prompt_history.length} onChange={(prompt) => { setCopied(false); onChange({ ...scene, prompt }); }} onGenerate={generate} onUpload={upload} generating={scene.status === "generating"} uploading={uploading} generateCount={project.schema_version === "2.0" ? 2 : 3} />
     <div className="panel full-prompt-panel"><div className="full-prompt-head"><div><strong>복사용 전체 이미지 프롬프트</strong><small>장면 내용 + 인물 외형 기준 + 공통 스타일이 항상 함께 들어갑니다.</small></div><button className="btn ghost" disabled={!scene.prompt.trim()} onClick={copyFullPrompt}>{copied ? <Check size={16} /> : <Copy size={16} />}{copied ? "복사됨" : "전체 프롬프트 복사"}</button></div><textarea aria-label="복사용 전체 이미지 프롬프트" readOnly value={fullPrompt} /></div>
     <div className="panel caption-panel"><label><strong>영상 자막</strong><small>이 문장이 장면 이미지 위에 표시됩니다.</small><textarea aria-label="영상 자막" value={scene.caption ?? scene.title} onChange={(event) => onChange({ ...scene, caption: event.target.value })} /></label><label className="duration-label"><strong>표시 시간 (초)</strong><input aria-label="장면 표시 시간" type="number" min="1" max="120" step="1" value={scene.duration ?? 10} onChange={(event) => onChange({ ...scene, duration: Number(event.target.value) })} /></label><label className="motion-label"><strong>이미지 효과</strong><small>MP4에 적용됩니다.</small><select aria-label="이미지 효과" value={scene.motion ?? "auto"} onChange={(event) => onChange({ ...scene, motion: event.target.value as ImageMotion })}><option value="auto">자동 (장면마다 다르게)</option><option value="zoom-in">천천히 줌인</option><option value="zoom-out">천천히 줌아웃</option><option value="pan-left">왼쪽으로 이동</option><option value="pan-right">오른쪽으로 이동</option><option value="pan-up">위로 이동</option><option value="pan-down">아래로 이동</option><option value="none">효과 없음</option></select></label></div>
     <div className="panel music-volume-panel"><label><strong>이 장면의 배경음악 볼륨</strong><small>{project.background_music ? "장면이 바뀔 때 볼륨도 부드럽게 바뀝니다." : "음악을 추가하면 이 설정이 적용됩니다."}</small><input aria-label="장면 배경음악 볼륨" type="range" min="0" max="100" step="1" value={sceneMusicVolume(scene.music_volume)} onChange={(event) => onChange({ ...scene, music_volume: Number(event.target.value) })} /></label><output>{sceneMusicVolume(scene.music_volume)}%</output></div>
     {error && <div className="error-banner">{error}</div>}
     <CandidateGrid candidates={scene.candidates} selected={scene.selected_candidate_id} onSelect={(id) => onChange({ ...scene, selected_candidate_id: id })} emptyLabel="이 장면의 이미지를 업로드하거나 생성해 보세요" />
+    {project.schema_version === "2.0" && scene.support_image_prompt && <><div className="panel support-panel"><h3>보조 이미지 · 별도 생성</h3><textarea aria-label="보조 이미지 프롬프트" value={scene.support_image_prompt} onChange={(event) => onChange({ ...scene, support_image_prompt: event.target.value })} /><div className="prompt-actions"><label className="btn ghost support-upload">보조 이미지 업로드<input type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => { const files = Array.from(event.target.files || []); event.target.value = ""; if (files.length) void uploadSupport(files); }} /></label><button className="btn primary" disabled={supportBusy} onClick={generateSupport}>{supportBusy ? "처리 중…" : "보조 후보 2장 생성"}</button></div></div><CandidateGrid candidates={scene.support_candidates || []} selected={scene.support_selected_candidate_id} onSelect={(id) => onChange({ ...scene, support_selected_candidate_id: id })} emptyLabel="보조 이미지는 선택 사항입니다" /></>}
   </div>;
 }
 
-function PromptEditor({ heading = "이미지 프롬프트", value, historyCount, onChange, onGenerate, onUpload, generating, uploading }: { heading?: string; value: string; historyCount: number; onChange: (value: string) => void; onGenerate: () => void; onUpload: (files: File[]) => void; generating: boolean; uploading: boolean }) {
+function PromptEditor({ heading = "이미지 프롬프트", value, historyCount, onChange, onGenerate, onUpload, generating, uploading, generateCount = 3 }: { heading?: string; value: string; historyCount: number; onChange: (value: string) => void; onGenerate: () => void; onUpload: (files: File[]) => void; generating: boolean; uploading: boolean; generateCount?: number }) {
   const input = useRef<HTMLInputElement>(null);
-  return <div className="panel prompt-panel"><div className="prompt-head"><div><strong>{heading}</strong><small>수정 이력 {historyCount}개</small></div><div className="prompt-actions"><input ref={input} className="file-input" type="file" accept="image/png,image/jpeg,image/webp" multiple aria-label="후보 이미지 파일 선택" onChange={(event) => { const files = Array.from(event.target.files || []); event.target.value = ""; if (files.length) onUpload(files); }} /><button className="btn ghost" disabled={generating || uploading} onClick={() => input.current?.click()}>{uploading ? <LoaderCircle className="spin" size={17} /> : <Upload size={17} />}{uploading ? "업로드 중…" : "이미지 업로드"}</button><button className="btn primary" disabled={generating || uploading} onClick={onGenerate}>{generating ? <LoaderCircle className="spin" size={17} /> : <WandSparkles size={17} />}{generating ? "생성 중…" : "후보 3장 생성"}</button></div></div><textarea value={value} onChange={(e) => onChange(e.target.value)} /><p className="upload-hint">ChatGPT Plus에서 만든 PNG·JPEG·WebP를 업로드할 수 있어요. 최대 6장, 각 12MB.</p></div>;
+  return <div className="panel prompt-panel"><div className="prompt-head"><div><strong>{heading}</strong><small>수정 이력 {historyCount}개</small></div><div className="prompt-actions"><input ref={input} className="file-input" type="file" accept="image/png,image/jpeg,image/webp" multiple aria-label="후보 이미지 파일 선택" onChange={(event) => { const files = Array.from(event.target.files || []); event.target.value = ""; if (files.length) onUpload(files); }} /><button className="btn ghost" disabled={generating || uploading} onClick={() => input.current?.click()}>{uploading ? <LoaderCircle className="spin" size={17} /> : <Upload size={17} />}{uploading ? "업로드 중…" : "이미지 업로드"}</button><button className="btn primary" disabled={generating || uploading} onClick={onGenerate}>{generating ? <LoaderCircle className="spin" size={17} /> : <WandSparkles size={17} />}{generating ? "생성 중…" : `후보 ${generateCount}장 생성`}</button></div></div><textarea value={value} onChange={(e) => onChange(e.target.value)} /><p className="upload-hint">ChatGPT Plus에서 만든 PNG·JPEG·WebP를 업로드할 수 있어요. 최대 6장, 각 12MB.</p></div>;
 }
 
 function CandidateGrid({ candidates, selected, onSelect, emptyLabel }: { candidates: ImageCandidate[]; selected?: string; onSelect: (id: string) => void; emptyLabel: string }) {

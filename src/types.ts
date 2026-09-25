@@ -28,6 +28,23 @@ export interface Scene {
   candidates: ImageCandidate[];
   selected_candidate_id?: string;
   status: CandidateStatus;
+  source_scene_id?: string;
+  start_sec?: number;
+  end_sec?: number;
+  narration?: string;
+  scene_description?: string;
+  visual_type?: string;
+  shot_type?: string;
+  location?: string;
+  main_subject?: string;
+  main_action?: string;
+  support_image_prompt?: string | null;
+  support_prompt_history?: PromptRevision[];
+  support_candidates?: ImageCandidate[];
+  support_selected_candidate_id?: string;
+  overlay_required?: boolean;
+  overlay_type?: string;
+  overlay_note?: string;
 }
 
 export interface BackgroundMusic {
@@ -56,7 +73,7 @@ export interface VisualAsset {
 }
 
 export interface ProjectData {
-  schema_version: 1;
+  schema_version: 1 | "2.0";
   id: string;
   episode: number;
   person: string;
@@ -73,11 +90,36 @@ export interface ProjectData {
   background_music?: BackgroundMusic;
   created_at: string;
   updated_at: string;
+  source?: AppDataV2;
+  app_state?: {
+    selected_character_image?: string;
+    selected_scene_images?: Record<string, string>;
+    selected_thumbnail?: string;
+    warnings?: string[];
+  };
+}
+
+export interface AppDataV2 {
+  schema_version: "2.0";
+  person: { name: string; one_line_intro: string; period: string };
+  video: { target_duration_sec: number; concept: string };
+  core_achievement: { title: string; must_visualize: boolean; scene_id: string; visual_subject: string };
+  character_profile: { age: string; face: string; eyes: string; hair: string; beard: string; body: string; outfit: string; impression: string };
+  scenes: Array<{
+    id: string; order: number; start_sec: number; end_sec: number; narration: string;
+    scene_description: string; visual_type: string; shot_type: string; location: string;
+    main_subject: string; main_action: string; image_prompt: string;
+    support_image_prompt: string | null; subtitle: string; motion: string;
+    overlay_required?: boolean; overlay_type?: string; overlay_note?: string;
+  }>;
+  ending: { title: string; message: string };
+  thumbnail: { phrases: string[]; prompts: string[]; recommended_index: number };
+  youtube: { titles: string[]; recommended_title_index: number; description: string; hashtags: string[] };
 }
 
 export interface GenerateRequest {
   project_path: string;
-  asset_kind: "anchor" | "scene" | "thumbnail";
+  asset_kind: "anchor" | "scene" | "support" | "thumbnail";
   scene_number?: number;
   prompt: string;
   count: number;

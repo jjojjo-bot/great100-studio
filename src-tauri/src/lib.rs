@@ -79,7 +79,7 @@ fn asset_output_dir(project_dir: &Path, kind: &str, scene_number: Option<u32>) -
     match kind {
         "anchor" => Ok(project_dir.join("02_character")),
         "thumbnail" => Ok(project_dir.join("04_thumbnail")),
-        "scene" => Ok(project_dir.join(format!("03_images/scene{:02}", scene_number.ok_or("장면 번호가 없습니다.")?))),
+        "scene" | "support" => Ok(project_dir.join(format!("03_images/scene{:02}", scene_number.ok_or("장면 번호가 없습니다.")?))),
         _ => Err("알 수 없는 이미지 종류입니다.".into()),
     }
 }
@@ -441,7 +441,7 @@ fn generate_mock(
         ("514263", "d6a35f"),
     ];
     let label = match request.asset_kind.as_str() {
-        "scene" => format!("SCENE {:02}", request.scene_number.unwrap_or(0)),
+        "scene" | "support" => format!("{} {:02}", request.asset_kind.to_uppercase(), request.scene_number.unwrap_or(0)),
         other => other.to_uppercase(),
     };
     let mut candidates = Vec::new();

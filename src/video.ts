@@ -1,4 +1,3 @@
-import { AudioBufferSource, BufferTarget, CanvasSource, Mp4OutputFormat, Output, Quality, canEncodeAudio, canEncodeVideo } from "mediabunny";
 import { getBackgroundMusic } from "./platform";
 import type { ImageMotion, ProjectData } from "./types";
 
@@ -174,6 +173,7 @@ async function loadImage(url: string): Promise<HTMLImageElement> {
 
 export async function renderProjectMp4(project: ProjectData, onProgress: (percent: number) => void = () => {}): Promise<Blob> {
   const plan = buildVideoPlan(project);
+  const { AudioBufferSource, BufferTarget, CanvasSource, Mp4OutputFormat, Output, Quality, canEncodeAudio, canEncodeVideo } = await import("mediabunny");
   if (!(await canEncodeVideo("avc", { width: VIDEO_WIDTH, height: VIDEO_HEIGHT, frameRate: VIDEO_FPS }))) {
     throw new Error("이 브라우저는 MP4 인코딩을 지원하지 않습니다. 최신 Chrome 또는 Edge에서 다시 시도해 주세요.");
   }
@@ -191,7 +191,7 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
   const totalFrames = frameCounts.reduce((sum, count) => sum + count, 0);
   const timeline = musicTimeline(plan);
   let audioContext: AudioContext | null = null;
-  let audioSource: AudioBufferSource | null = null;
+  let audioSource: import("mediabunny").AudioBufferSource | null = null;
   let decodedMusic: AudioBuffer | null = null;
   if (project.background_music) {
     const musicBlob = await getBackgroundMusic(project);

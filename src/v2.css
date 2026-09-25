@@ -1,0 +1,31 @@
+.v2-scene-list{display:grid;gap:10px;margin-top:16px}
+.v2-scene-card{padding:16px 19px}
+.v2-scene-card summary{cursor:pointer;display:flex;gap:13px;align-items:center;flex-wrap:wrap;font-size:12px}
+.v2-scene-card summary b{color:#c66f3f}
+.v2-scene-card summary span{color:#809088}
+.v2-scene-card em,.scene-context em,.review-image-card em{font-style:normal;color:#ad6134;background:#fff1df;padding:4px 7px;border-radius:5px;font-size:10px}
+.scene-data-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px 18px;margin-top:16px}
+.scene-data-grid p{font-size:11px;line-height:1.6;color:#5d6c65;white-space:pre-wrap}
+.scene-data-grid b{display:block;color:#234d43;margin-bottom:4px}
+.quality-metrics{display:flex;flex-wrap:wrap;gap:9px}
+.quality-metrics span{padding:9px 12px;border-radius:7px;background:#edf3ec;color:#285749;font-size:11px}
+.page>.panel{padding:18px;margin-bottom:16px}
+.quality-warnings li,.error-banner li{margin-top:7px;line-height:1.5}
+.scene-context,.neighbor-panel,.support-panel{padding:17px 19px;margin-bottom:16px}
+.scene-context p{font-size:11px;color:#5f6d67;line-height:1.55}
+.scene-context b{color:#244c43}
+.scene-context-head{display:flex;align-items:center;gap:10px}
+.scene-context-head span{font-size:11px;color:#a2633c}
+.neighbor-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:10px}
+.neighbor-grid img,.neighbor-empty{width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:7px}
+.neighbor-empty{display:grid;place-items:center;background:#edece5;color:#8c948f;font-size:11px}
+.neighbor-grid small{display:block;margin-top:5px;color:#69776f}
+.support-panel textarea{min-height:100px;margin:9px 0}
+.support-upload input{display:none}
+.review-image-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:16px}
+.review-image-card{padding:10px}
+.review-image-card img,.review-thumbnail{width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:8px}
+.review-image-card strong{display:block;font-size:11px;margin:7px 0}
+.review-image-card .candidate-empty{height:auto;aspect-ratio:16/9}
+.review-thumbnail{max-width:380px}
+@media(max-width:850px){.scene-data-grid,.review-image-grid{grid-template-columns:1fr}.quality-metrics{display:grid;grid-template-columns:1fr 1fr}}

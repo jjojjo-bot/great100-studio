@@ -156,7 +156,7 @@ export async function generateImages(request: GenerateRequest): Promise<ImageCan
     return generated;
   }
   await new Promise((resolve) => setTimeout(resolve, 300));
-  const label = request.asset_kind === "scene" ? `SCENE ${String(request.scene_number).padStart(2, "0")}` : request.asset_kind.toUpperCase();
+  const label = request.asset_kind === "scene" || request.asset_kind === "support" ? `${request.asset_kind.toUpperCase()} ${String(request.scene_number).padStart(2, "0")}` : request.asset_kind.toUpperCase();
   return Array.from({ length: request.count }, (_, index) => {
     const id = crypto.randomUUID();
     return { id, path: candidatePath(request, id, "svg"), preview_url: mockPreview(label, index), created_at: new Date().toISOString(), mode: "mock" as const };
@@ -203,8 +203,9 @@ export async function importImageCandidates(files: File[], location: ImageLocati
 }
 
 function candidatePath(request: ImageLocation, id: string, extension: string) {
-  const folder = request.asset_kind === "scene" ? `03_images/scene${String(request.scene_number).padStart(2, "0")}` : request.asset_kind === "anchor" ? "02_character" : "04_thumbnail";
-  return `${request.project_path}/${folder}/candidate_${id}.${extension}`;
+  const folder = request.asset_kind === "scene" || request.asset_kind === "support" ? `03_images/scene${String(request.scene_number).padStart(2, "0")}` : request.asset_kind === "anchor" ? "02_character" : "04_thumbnail";
+  const prefix = request.asset_kind === "support" ? "support_" : "candidate_";
+  return `${request.project_path}/${folder}/${prefix}${id}.${extension}`;
 }
 
 export function downloadBlob(blob: Blob, filename: string): void {
@@ -254,19 +255,22 @@ export async function buildProjectZip(project: ProjectData, video?: Blob): Promi
   for (const asset of [withoutPreviews.anchor, withoutPreviews.thumbnail, ...withoutPreviews.scenes]) {
     asset.candidates = asset.candidates.map(({ preview_url: _preview, ...candidate }) => ({ ...candidate, preview_url: "" }));
   }
+  for (const scene of withoutPreviews.scenes) scene.support_candidates = scene.support_candidates?.map(({ preview_url: _preview, ...candidate }) => ({ ...candidate, preview_url: "" }));
   root.file("project_data.json", JSON.stringify(withoutPreviews, null, 2));
   for (const scene of project.scenes) {
     root.file(`03_images/scene${String(scene.number).padStart(2, "0")}/image_prompt.txt`, composeScenePrompt(project, scene));
+    if (scene.support_image_prompt) root.file(`03_images/scene${String(scene.number).padStart(2, "0")}/support_image_prompt.txt`, scene.support_image_prompt);
   }
   root.file("04_thumbnail/image_prompt.txt", composeThumbnailPrompt(project));
   if (video) root.file(`05_exports/${project.folder_name}.mp4`, video);
   const promptHistory = [
     ...historyLines("anchor", project.anchor),
     ...project.scenes.flatMap((scene) => historyLines(`scene${String(scene.number).padStart(2, "0")}`, scene)),
+    ...project.scenes.flatMap((scene) => (scene.support_prompt_history || []).map((revision) => JSON.stringify({ asset_kind: `scene${String(scene.number).padStart(2, "0")}_support`, ...revision }))),
     ...historyLines("thumbnail", project.thumbnail),
   ];
   root.file("06_logs/prompt_history.jsonl", promptHistory.join("\n") + (promptHistory.length ? "\n" : ""));
-  for (const asset of [project.anchor, project.thumbnail, ...project.scenes]) {
+  for (const [assetIndex, asset] of [project.anchor, project.thumbnail, ...project.scenes, ...project.scenes.map((scene) => ({ candidates: scene.support_candidates || [], selected_candidate_id: scene.support_selected_candidate_id }))].entries()) {
     for (const candidate of asset.candidates) {
       const blob = await (await fetch(candidate.preview_url)).blob();
       const path = candidate.path.replace(`${project.project_path}/`, "");
@@ -274,7 +278,7 @@ export async function buildProjectZip(project: ProjectData, video?: Blob): Promi
       if (candidate.id === asset.selected_candidate_id) {
         const folder = path.slice(0, path.lastIndexOf("/"));
         const extension = path.split(".").at(-1) || "jpg";
-        root.file(`${folder}/selected.${extension}`, blob);
+        root.file(`${folder}/${assetIndex >= project.scenes.length + 2 ? "selected_support" : "selected"}.${extension}`, blob);
       }
     }
   }
