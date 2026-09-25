@@ -160,6 +160,44 @@ fn save_project(project: Value) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn delete_project(project_path: String, project_id: String) -> Result<String, String> {
+    let root = projects_root()?.canonicalize().map_err(|error| error.to_string())?;
+    let requested = safe_project_path(&project_path)?;
+    let metadata = fs::symlink_metadata(&requested).map_err(|error| error.to_string())?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err("프로젝트 폴더만 삭제할 수 있습니다.".into());
+    }
+    let project_dir = requested.canonicalize().map_err(|error| error.to_string())?;
+    if project_dir.parent() != Some(root.as_path()) {
+        return Err("프로젝트 루트의 직접 하위 폴더만 삭제할 수 있습니다.".into());
+    }
+    let data: Value = serde_json::from_slice(&fs::read(project_dir.join("project_data.json")).map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())?;
+    let folder = project_dir.file_name().and_then(|name| name.to_str()).ok_or("프로젝트 폴더명이 올바르지 않습니다.")?;
+    if data.get("id").and_then(Value::as_str) != Some(project_id.as_str())
+        || data.get("folder_name").and_then(Value::as_str) != Some(folder)
+        || data.get("project_path").and_then(Value::as_str) != Some(project_path.as_str())
+    {
+        return Err("삭제할 프로젝트 정보가 저장된 내용과 일치하지 않습니다.".into());
+    }
+    let trash = root.join(".trash");
+    if trash.exists() {
+        let trash_metadata = fs::symlink_metadata(&trash).map_err(|error| error.to_string())?;
+        if !trash_metadata.is_dir() || trash_metadata.file_type().is_symlink() {
+            return Err("프로젝트 휴지통 경로가 올바르지 않습니다.".into());
+        }
+    } else {
+        fs::create_dir(&trash).map_err(|error| error.to_string())?;
+    }
+    if trash.canonicalize().map_err(|error| error.to_string())?.parent() != Some(root.as_path()) {
+        return Err("프로젝트 휴지통은 프로젝트 폴더 안에 있어야 합니다.".into());
+    }
+    let target = trash.join(format!("{folder}_{}", Uuid::new_v4()));
+    fs::rename(&project_dir, &target).map_err(|error| error.to_string())?;
+    Ok(target.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
 async fn generate_images(request: GenerateRequest) -> Result<Vec<ImageCandidate>, String> {
     let project_dir = safe_project_path(&request.project_path)?;
     let output_dir = asset_output_dir(&project_dir, &request.asset_kind, request.scene_number)?;
@@ -378,6 +416,7 @@ pub fn run() {
             create_project,
             list_projects,
             save_project,
+            delete_project,
             generate_images,
             import_image,
             save_video

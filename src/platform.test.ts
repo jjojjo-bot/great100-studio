@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "fake-indexeddb/auto";
 import JSZip from "jszip";
 import { createProjectDraft } from "./parser";
-import { buildProjectZip, detectImageFormat, importImageCandidates } from "./platform";
+import { buildProjectZip, createProjectOnDisk, deleteProject, detectImageFormat, getRenderedVideo, importImageCandidates, listProjects, saveProject, saveRenderedVideo } from "./platform";
 import { SAMPLE_WORK_TEXT } from "./sample";
 
 describe("project export", () => {
@@ -67,6 +68,26 @@ describe("uploaded image validation", () => {
     expect(candidate.mode).toBe("uploaded");
     expect(candidate.path).toMatch(/^projects\/002_이순신\/02_character\/candidate_.+\.png$/);
     expect(candidate.preview_url).toBe("data:image/png;base64,iVBORw0KGgo=");
+  });
+});
+
+describe("project deletion", () => {
+  it("removes only the matching browser project and its rendered MP4", async () => {
+    vi.stubGlobal("window", {});
+    const removed = createProjectDraft(21, "삭제 시험", "장군 · 지도자", SAMPLE_WORK_TEXT);
+    removed.project_path = await createProjectOnDisk(removed);
+    await saveProject(removed);
+    await saveRenderedVideo(removed, new Blob(["test"], { type: "video/mp4" }));
+    const kept = createProjectDraft(22, "보존 시험", "장군 · 지도자", SAMPLE_WORK_TEXT);
+    kept.project_path = await createProjectOnDisk(kept);
+    await saveProject(kept);
+    await expect(deleteProject({ ...removed, folder_name: "다른 폴더" })).rejects.toThrow("일치하지 않습니다");
+    expect((await listProjects()).some((item) => item.id === removed.id)).toBe(true);
+    await deleteProject(removed);
+    const remaining = await listProjects();
+    expect(remaining.some((item) => item.id === removed.id)).toBe(false);
+    expect(remaining.some((item) => item.id === kept.id)).toBe(true);
+    expect(await getRenderedVideo(removed)).toBeNull();
   });
 });
 

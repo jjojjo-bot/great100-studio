@@ -15,11 +15,12 @@ import {
   RefreshCw,
   Save,
   Sparkles,
+  Trash2,
   Upload,
   WandSparkles,
 } from "lucide-react";
 import { createProjectDraft, DEFAULT_STYLE, parseWorkText } from "./parser";
-import { createProjectOnDisk, downloadBlob, exportProjectZip, generateImages, getAccessCode, getRenderedVideo, importImageCandidates, isTauri, listProjects, saveProject, saveRenderedVideo, setAccessCode } from "./platform";
+import { createProjectOnDisk, deleteProject, downloadBlob, exportProjectZip, generateImages, getAccessCode, getRenderedVideo, importImageCandidates, isTauri, listProjects, saveProject, saveRenderedVideo, setAccessCode } from "./platform";
 import { buildVideoPlan, renderProjectMp4 } from "./video";
 import { SAMPLE_WORK_TEXT } from "./sample";
 import type { ImageCandidate, ProjectData, Scene, VisualAsset } from "./types";
@@ -35,6 +36,7 @@ function App() {
   const [project, setProject] = useState<ProjectData | null>(null);
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const [deletingId, setDeletingId] = useState("");
   const [projects, setProjects] = useState<ProjectData[]>([]);
   const [accessCode, updateAccessCode] = useState(getAccessCode);
 
@@ -75,6 +77,22 @@ function App() {
   const download = async (item: ProjectData) => {
     try { await exportProjectZip(item); }
     catch (error) { setNotice(`ZIP 내보내기 실패: ${String(error)}`); }
+  };
+
+  const removeProject = async (item: ProjectData) => {
+    const label = `EP. ${String(item.episode).padStart(3, "0")} · ${item.person} (${item.folder_name})`;
+    const consequence = isTauri()
+      ? "프로젝트 폴더는 projects/.trash로 이동하며 앱 목록에서 사라집니다."
+      : "이 브라우저에 저장된 프로젝트·후보 이미지·완성 MP4가 함께 삭제되며 복구할 수 없습니다.";
+    if (!window.confirm(`${label}\n\n${consequence}\n\n정말 삭제할까요?`)) return;
+    setDeletingId(item.id);
+    try {
+      await deleteProject(item);
+      setProjects((items) => items.filter((saved) => saved.id !== item.id));
+      if (project?.id === item.id) setProject(null);
+      setNotice(isTauri() ? `${label} 프로젝트를 휴지통으로 옮겼습니다.` : `${label} 프로젝트를 삭제했습니다.`);
+    } catch (error) { setNotice(`프로젝트 삭제 실패: ${String(error)}`); }
+    finally { setDeletingId(""); }
   };
 
   const updateScene = async (scene: Scene) => {
@@ -123,7 +141,7 @@ function App() {
 
         <section className="workspace">
           {notice && <div className="toast" onClick={() => setNotice("")}>{notice}</div>}
-          {step === 0 && <Dashboard onStart={() => setStep(1)} projects={projects} accessCode={accessCode} onAccessCode={(code) => { updateAccessCode(code); setAccessCode(code); }} onOpen={(item) => { setProject(item); setStep(2); }} onDownload={download} />}
+          {step === 0 && <Dashboard onStart={() => setStep(1)} projects={projects} accessCode={accessCode} onAccessCode={(code) => { updateAccessCode(code); setAccessCode(code); }} onOpen={(item) => { setProject(item); setStep(2); }} onDownload={download} onDelete={removeProject} deletingId={deletingId} />}
           {step === 1 && (
             <ProjectSetup episode={episode} person={person} category={category} source={source} busy={busy}
               setEpisode={setEpisode} setPerson={setPerson} setCategory={setCategory} setSource={setSource}
@@ -148,7 +166,7 @@ function App() {
   );
 }
 
-function Dashboard({ onStart, projects, accessCode, onAccessCode, onOpen, onDownload }: { onStart: () => void; projects: ProjectData[]; accessCode: string; onAccessCode: (code: string) => void; onOpen: (project: ProjectData) => void; onDownload: (project: ProjectData) => void }) {
+function Dashboard({ onStart, projects, accessCode, onAccessCode, onOpen, onDownload, onDelete, deletingId }: { onStart: () => void; projects: ProjectData[]; accessCode: string; onAccessCode: (code: string) => void; onOpen: (project: ProjectData) => void; onDownload: (project: ProjectData) => void; onDelete: (project: ProjectData) => void; deletingId: string }) {
   return <div className="dashboard-page"><div className="hero-page">
     <div className="hero-copy">
       <div className="eyebrow">GREAT STORIES, BEAUTIFULLY MADE</div>
@@ -164,7 +182,7 @@ function Dashboard({ onStart, projects, accessCode, onAccessCode, onOpen, onDown
     </div>
   </div>
   {!isTauri() && <div className="access-panel"><KeyRound size={18} /><div><strong>실제 이미지 생성 접근 코드</strong><small>배포 관리자에게 받은 코드를 입력하면 OpenAI 이미지 생성이 활성화됩니다. 비워두면 mock mode로 작동합니다.</small></div><input type="password" aria-label="이미지 생성 접근 코드" placeholder="접근 코드 입력" value={accessCode} onChange={(event) => onAccessCode(event.target.value)} /></div>}
-  {projects.length > 0 && <div className="recent-projects"><div className="recent-head"><h3>최근 프로젝트</h3><span>{projects.length}개</span></div><div className="recent-grid">{projects.map((item) => <div className="recent-card" key={item.id}><span>EP. {String(item.episode).padStart(3, "0")}</span><strong>{item.person}</strong><small>{item.scenes.length}개 장면 · {new Date(item.updated_at).toLocaleDateString("ko-KR")}</small><div><button className="btn ghost" onClick={() => onOpen(item)}>이어 작업하기</button>{!isTauri() && <button className="btn ghost" onClick={() => onDownload(item)}><Download size={14} /> ZIP</button>}</div></div>)}</div></div>}
+  {projects.length > 0 && <div className="recent-projects"><div className="recent-head"><h3>최근 프로젝트</h3><span>{projects.length}개</span></div><div className="recent-grid">{projects.map((item) => <div className="recent-card" key={item.id}><span>EP. {String(item.episode).padStart(3, "0")}</span><strong>{item.person}</strong><small>{item.scenes.length}개 장면 · {new Date(item.updated_at).toLocaleDateString("ko-KR")}</small><div><button className="btn ghost" onClick={() => onOpen(item)}>이어 작업하기</button>{!isTauri() && <button className="btn ghost" onClick={() => onDownload(item)}><Download size={14} /> ZIP</button>}<button className="btn ghost delete-project" disabled={deletingId === item.id} onClick={() => onDelete(item)}>{deletingId === item.id ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />} 삭제</button></div></div>)}</div></div>}
   </div>;
 }
 

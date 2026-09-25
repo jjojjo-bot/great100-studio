@@ -48,6 +48,18 @@ export async function saveProject(project: ProjectData): Promise<void> {
   await db.put("projects", project);
 }
 
+export async function deleteProject(project: ProjectData): Promise<string | undefined> {
+  if (isTauri()) return invoke<string>("delete_project", { projectPath: project.project_path, projectId: project.id });
+  const db = await database();
+  const saved = await db.get("projects", project.id) as ProjectData | undefined;
+  if (!saved || saved.project_path !== project.project_path || saved.folder_name !== project.folder_name) {
+    throw new Error("삭제할 프로젝트가 저장된 내용과 일치하지 않습니다. 목록을 새로고침해 주세요.");
+  }
+  const tx = db.transaction(["projects", "videos"], "readwrite");
+  await Promise.all([tx.objectStore("projects").delete(project.id), tx.objectStore("videos").delete(project.id)]);
+  await tx.done;
+}
+
 export async function generateImages(request: GenerateRequest): Promise<ImageCandidate[]> {
   if (isTauri()) return invoke("generate_images", { request });
   const accessCode = getAccessCode();
