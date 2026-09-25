@@ -55,4 +55,44 @@ describe("Work 제작안 파서", () => {
     expect(result.thumbnail.prompt).toContain("이순신과 판옥선");
     expect(result.ending_message).toBe("함께 바다를 지켰습니다.");
   });
+
+  it("열 순서와 이름이 다른 장면 표도 읽는다", () => {
+    const result = parseWorkText(`인물명: 유관순
+| 컷 번호 | 이미지 프롬프트 | 길이 | 자막 |
+|---|---|---:|---|
+| 1 | 어린 유관순이 친구들과 태극기를 준비하는 그림 | 12초 | 함께 용기를 냈어요. |
+| 2 | 마을 사람들이 모인 거리 그림 | 0:12~0:25 | 모두가 함께 외쳤어요. |`);
+    expect(result.scenes).toHaveLength(2);
+    expect(result.scenes[0]).toMatchObject({ number: 1, duration: 12, caption: "함께 용기를 냈어요.", prompt: "어린 유관순이 친구들과 태극기를 준비하는 그림" });
+    expect(result.scenes[1].duration).toBe(13);
+  });
+
+  it("굵은 글씨 장면 제목과 한글 필드도 읽는다", () => {
+    const result = parseWorkText(`오늘의 인물: 세종
+**장면 1 — 어린 시절**
+**시간:** 8초
+**내레이션:** 세종은 글을 좋아했어요.
+**이미지 프롬프트:** 책을 읽는 어린 세종.
+
+**Scene 2: 새 글자**
+길이: 9초
+자막: 모두를 위한 글자를 만들었어요.
+프롬프트: 백성들과 이야기하는 세종.
+
+## 썸네일
+세종과 책`);
+    expect(result.scenes).toHaveLength(2);
+    expect(result.scenes[0]).toMatchObject({ title: "어린 시절", duration: 8, caption: "세종은 글을 좋아했어요.", prompt: "책을 읽는 어린 세종." });
+    expect(result.scenes[1]).toMatchObject({ duration: 9, caption: "모두를 위한 글자를 만들었어요." });
+  });
+
+  it("JSON 형식의 제작안도 읽는다", () => {
+    const result = parseWorkText(JSON.stringify({ person: "장영실", character_profile: { age: "40대", clothing: "조선 관복" },
+      scenes: [{ scene: 1, title: "발명", duration: 10, narration: "새로운 도구를 만들었어요.", image_prompt: "조선의 공방에서 도구를 만드는 장영실" }],
+      thumbnail: { prompt: "장영실과 해시계" }, ending_message: "호기심을 잊지 마세요." }));
+    expect(result.person).toBe("장영실");
+    expect(result.character_profile.description).toContain("조선 관복");
+    expect(result.scenes[0]).toMatchObject({ title: "발명", caption: "새로운 도구를 만들었어요.", prompt: "조선의 공방에서 도구를 만드는 장영실" });
+    expect(result.thumbnail.prompt).toBe("장영실과 해시계");
+  });
 });

@@ -47,40 +47,52 @@ const timecodeSeconds = (text: string) => {
 };
 
 const tableDuration = (text: string) => {
-  const match = text.match(/(\d{1,2}:\d{2}(?::\d{2})?)\s*[–—-]\s*(\d{1,2}:\d{2}(?::\d{2})?)/);
-  return match ? timecodeSeconds(match[2]) - timecodeSeconds(match[1]) : undefined;
+  const range = text.match(/(\d{1,2}:\d{2}(?::\d{2})?)\s*[–—~～-]\s*(\d{1,2}:\d{2}(?::\d{2})?)/);
+  if (range) return timecodeSeconds(range[2]) - timecodeSeconds(range[1]);
+  const seconds = text.match(/(?:약\s*)?(\d+(?:\.\d+)?)\s*(?:초|seconds?|sec\b)/i);
+  return seconds ? Number(seconds[1]) : /^\d+(?:\.\d+)?$/.test(text.trim()) ? Number(text.trim()) : undefined;
 };
 
 const parseSceneTable = (text: string): Scene[] => {
-  const section = markdownSection(text, /^장면별\s*제작\s*구성/) || text;
-  const rows = section.split(/\r?\n/).filter((line) => /^\s*\|/.test(line));
-  if (!rows.some((row) => /\|\s*장면\s*\|/.test(row) && /프롬프트/.test(row))) return [];
-  return rows.flatMap((row): Scene[] => {
-    const cells = row.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
-    if (cells.length < 4 || !/^\d+$/.test(cells[0])) return [];
-    const number = Number(cells[0]);
-    const visual = cells.slice(3).join("|");
-    const promptMatch = visual.match(/(?:\*\*)?프롬프트\s*[:：](?:\*\*)?\s*([\s\S]*?)(?=\s*(?:\*\*)?보조\s*이미지\s*[:：]|$)/i);
-    const prompt = cleanInline(promptMatch?.[1] || visual);
-    const title = cleanInline(visual.split(/(?:\*\*)?프롬프트\s*[:：]/i)[0]).replace(/[.!。]\s*$/, "") || `장면 ${number}`;
-    const caption = cleanInline(cells[2]);
-    const duration = tableDuration(cells[1]);
-    return [{
-      id: `scene-${String(number).padStart(2, "0")}`,
-      number,
-      title,
-      duration: duration && duration > 0 ? duration : undefined,
-      caption: caption || title,
-      prompt,
-      prompt_history: [{ prompt, created_at: new Date().toISOString() }],
-      candidates: [],
-      status: "idle",
-    }];
+  const lines = text.split(/\r?\n/);
+  const cellsOf = (row: string) => row.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+  const headerIndex = lines.findIndex((row) => {
+    if (!/^\s*\|/.test(row)) return false;
+    const headers = cellsOf(row).map((cell) => cleanInline(cell).toLowerCase());
+    return headers.some((cell) => /^(?:장면|씬|scene|번호|순서|컷|no\.?)(?:\s|$)/i.test(cell)) && headers.some((cell) => /프롬프트|이미지|화면|구성/.test(cell));
   });
+  if (headerIndex < 0) return [];
+  const headers = cellsOf(lines[headerIndex]).map((cell) => cleanInline(cell).toLowerCase());
+  const column = (pattern: RegExp) => headers.findIndex((header) => pattern.test(header));
+  const numberColumn = column(/^(?:장면|씬|scene|번호|순서|컷|no\.?)(?:\s|$)/i);
+  const timeColumn = column(/시간|길이|duration|time|초/);
+  const captionColumn = column(/내레이션|나레이션|대본|자막|음성|설명/);
+  const promptColumn = headers.findIndex((header, index) => index !== numberColumn && /프롬프트|이미지|화면|구성|컷/.test(header));
+  const titleColumn = column(/제목|장면명|씬명/);
+  const scenes: Scene[] = [];
+  for (const row of lines.slice(headerIndex + 1)) {
+    if (!/^\s*\|/.test(row)) break;
+    const cells = cellsOf(row);
+    const numberMatch = cleanInline(cells[numberColumn] || "").match(/^(?:(?:scene|장면|씬)\s*)?0*(\d+)(?:\s*[.:-].*)?$/i);
+    if (!numberMatch) continue;
+    const number = Number(numberMatch[1]);
+    const visual = cells[promptColumn] || "";
+    const promptMatch = visual.match(/(?:\*\*)?(?:이미지\s*)?프롬프트\s*[:：](?:\*\*)?\s*([\s\S]*?)(?=\s*(?:\*\*)?보조\s*이미지\s*[:：]|$)/i);
+    const prompt = cleanInline(promptMatch?.[1] || visual);
+    const lead = cleanInline(visual.split(/(?:\*\*)?(?:이미지\s*)?프롬프트\s*[:：]/i)[0]).replace(/[.!。]\s*$/, "");
+    const title = cleanInline(cells[titleColumn] || "") || (promptMatch ? lead : "") || `장면 ${number}`;
+    const caption = cleanInline(cells[captionColumn] || "") || title;
+    const duration = tableDuration(cells[timeColumn] || "");
+    scenes.push({ id: `scene-${String(number).padStart(2, "0")}`, number, title,
+      duration: duration && duration > 0 ? duration : undefined, caption, prompt,
+      prompt_history: prompt ? [{ prompt, created_at: new Date().toISOString() }] : [],
+      candidates: [], status: "idle" });
+  }
+  return scenes;
 };
 
 const thumbnailPromptFromMarkdown = (text: string) => {
-  const section = markdownSection(text, /^썸네일\s*이미지\s*프롬프트/);
+  const section = markdownSection(text, /^썸네일.*프롬프트/);
   if (!section) return "";
   const recommended = section.match(/추천\s*썸네일\s*[:：]\s*(\d+)안/);
   const options = [...section.matchAll(/^\s*\d+\.\s*\*\*(\d+)안\s*[:：]\*\*\s*(.+)$/gm)];
@@ -94,8 +106,74 @@ const endingFromMarkdown = (text: string) => {
   return cleanInline(match?.[1] || "");
 };
 
+const sceneField = (text: string, labels: string[]) => {
+  const match = text.match(new RegExp(`(?:^|\\n)\\s*(?:[-*]\\s*)?(?:\\*\\*)?(?:${labels.join("|")})\\s*[:：](?:\\*\\*)?\\s*([^\\n]+)`, "im"));
+  return cleanInline(match?.[1] || "");
+};
+
+const parseSceneHeadings = (text: string): Scene[] => {
+  const lines = text.split(/\r?\n/);
+  const heading = /^\s*(?:#{1,6}\s*)?(?:\*\*)?(?:(?:scene|장면|씬)\s*#?\s*(\d+)|(?:(\d+)\s*[.)-]\s*(?:scene|장면|씬)))\s*(?:[-—:：.|]\s*)?([^\n]*?)(?:\*\*)?\s*$/i;
+  const scenes: Scene[] = [];
+  let current: { number: number; title: string; body: string[] } | null = null;
+  const finish = () => {
+    if (!current) return;
+    const body = current.body.join("\n").trim();
+    const prompt = sceneField(body, ["image[_ ]?prompt", "이미지\\s*프롬프트", "prompt", "프롬프트"]) || body;
+    const caption = sceneField(body, ["narration", "caption", "subtitle", "내레이션", "나레이션", "자막", "대사", "대본"]) || current.title;
+    const durationText = sceneField(body, ["duration", "시간", "길이"]);
+    const duration = tableDuration(durationText);
+    scenes.push({ id: `scene-${String(current.number).padStart(2, "0")}`, number: current.number,
+      title: current.title || `장면 ${current.number}`, duration: duration && duration > 0 ? duration : undefined,
+      caption, prompt, prompt_history: prompt ? [{ prompt, created_at: new Date().toISOString() }] : [],
+      candidates: [], status: "idle" });
+    current = null;
+  };
+  for (const line of lines) {
+    const match = line.match(heading);
+    if (match) {
+      finish();
+      current = { number: Number(match[1] || match[2]), title: cleanInline(match[3] || ""), body: [] };
+    } else if (current && /^\s*#{1,2}\s+/.test(line)) {
+      finish();
+    } else if (current) current.body.push(line);
+  }
+  finish();
+  return scenes;
+};
+
+const parseJsonPlan = (text: string): ReturnType<typeof parseWorkText> | null => {
+  const source = text.trim().match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i)?.[1] || text.trim();
+  if (!source.startsWith("{")) return null;
+  let data: Record<string, unknown>;
+  try { data = JSON.parse(source); } catch { return null; }
+  if (!Array.isArray(data.scenes)) return null;
+  const string = (value: unknown) => typeof value === "string" ? value.trim() : "";
+  const profileRaw = data.character_profile ?? data.characterProfile;
+  const profileRecord = profileRaw && typeof profileRaw === "object" ? profileRaw as Record<string, unknown> : {};
+  const profile = string(profileRaw) || string(profileRecord.description) || Object.entries(profileRecord).map(([key, value]) => `${key}: ${string(value)}`).filter((entry) => !entry.endsWith(": ")).join("\n");
+  const thumbnailRaw = data.thumbnail ?? data.thumbnail_prompt;
+  const thumbnailRecord = thumbnailRaw && typeof thumbnailRaw === "object" ? thumbnailRaw as Record<string, unknown> : {};
+  const scenes: Scene[] = data.scenes.map((value, index) => {
+    const item = value && typeof value === "object" ? value as Record<string, unknown> : {};
+    const number = Number(item.scene ?? item.number ?? index + 1) || index + 1;
+    const title = string(item.title ?? item.scene_title) || `장면 ${number}`;
+    const prompt = string(item.prompt ?? item.image_prompt ?? item.imagePrompt);
+    const caption = string(item.caption ?? item.narration ?? item.subtitle ?? item.script) || title;
+    const durationValue = item.duration ?? item.seconds ?? item.time;
+    const duration = typeof durationValue === "number" ? durationValue : tableDuration(string(durationValue));
+    return { id: `scene-${String(number).padStart(2, "0")}`, number, title,
+      duration: duration && duration > 0 ? duration : undefined, caption, prompt,
+      prompt_history: prompt ? [{ prompt, created_at: new Date().toISOString() }] : [], candidates: [], status: "idle" as const };
+  });
+  return { person: string(data.person ?? data.name) || "새 인물", character_profile: { description: profile },
+    scenes, thumbnail: emptyAsset(string(thumbnailRaw) || string(thumbnailRecord.prompt)),
+    ending_message: string(data.ending_message ?? data.endingMessage),
+    style_guide: string(data.style_guide ?? data.style) || DEFAULT_STYLE };
+};
+
 const parseProfile = (text: string): CharacterProfile => {
-  const block = markdownSection(text, /^인물\s*(?:외형\s*기준|설정|프로필)$/i) || sectionAfter(text, ["character[_ ]?profile", "인물\\s*(?:외형\\s*기준|설정|프로필)"]);
+  const block = markdownSection(text, /^인물\s*(?:외형|설정|프로필|캐릭터)/i) || sectionAfter(text, ["character[_ ]?profile", "인물\\s*(?:외형\\s*기준|설정|프로필)"]);
   const source = block || valueAfter(text, ["character[_ ]?profile", "인물\\s*(?:외형\\s*기준|설정|프로필)"]);
   const field = (labels: string[]) => valueAfter(source, labels);
   return {
@@ -110,30 +188,14 @@ const parseProfile = (text: string): CharacterProfile => {
 };
 
 export function parseWorkText(text: string): Pick<ProjectData, "person" | "character_profile" | "scenes" | "thumbnail" | "ending_message" | "style_guide"> {
+  const jsonPlan = parseJsonPlan(text);
+  if (jsonPlan) return jsonPlan;
   const person = valueAfter(text, ["person", "인물명", "오늘의\\s*인물", "위인", "주인공"]) || "새 인물";
-  const scenePattern = /(?:^|\n)\s*(?:#{1,6}\s*)?(?:Scene|장면)\s*(\d+)\s*(?:[-—:：.]\s*)?([^\n]*)\n([\s\S]*?)(?=\n\s*(?:#{1,6}\s*)?(?:Scene|장면)\s*\d+|\n\s*(?:#{1,6}\s*)?(?:thumbnail|썸네일|ending[_ ]?message|엔딩\s*메시지)\s*[:：]?|$)/gi;
-  const scenes: Scene[] = parseSceneTable(text);
-  for (const match of scenes.length ? [] : text.matchAll(scenePattern)) {
-    const number = Number(match[1]);
-    const body = match[3].trim();
-    const prompt = valueAfter(body, ["prompt", "이미지\\s*프롬프트", "프롬프트"]) || body;
-    const durationRaw = valueAfter(body, ["duration", "시간", "길이"]);
-    const title = match[2].replace(/^[-—:：.]\s*/, "").trim() || `장면 ${number}`;
-    scenes.push({
-      id: `scene-${String(number).padStart(2, "0")}`,
-      number,
-      title,
-      duration: durationRaw ? Number(durationRaw.replace(/[^0-9.]/g, "")) || undefined : undefined,
-      caption: valueAfter(body, ["caption", "subtitle", "narration", "자막", "내레이션", "대사"]) || title,
-      prompt,
-      prompt_history: [{ prompt, created_at: new Date().toISOString() }],
-      candidates: [],
-      status: "idle",
-    });
-  }
+  const tableScenes = parseSceneTable(text);
+  const scenes = tableScenes.length ? tableScenes : parseSceneHeadings(text);
   const thumbnailPrompt = thumbnailPromptFromMarkdown(text) || sectionAfter(text, ["thumbnail", "썸네일(?:\\s*프롬프트)?"]) || valueAfter(text, ["thumbnail", "썸네일(?:\\s*프롬프트)?"]);
   const ending = endingFromMarkdown(text) || sectionAfter(text, ["ending[_ ]?message", "엔딩\\s*메시지"]) || valueAfter(text, ["ending[_ ]?message", "엔딩\\s*메시지"]);
-  const commonStyle = text.match(/\*\*공통\s*이미지\s*조건\s*[:：]\*\*\s*([^\n]+)/)?.[1]?.trim();
+  const commonStyle = sceneField(text, ["공통\\s*이미지\\s*조건", "스타일\\s*가이드"]);
   const styleGuide = commonStyle
     ? cleanInline(commonStyle).replace(/^모든\s*프롬프트에\s*\*/, "").replace(/\*를\s*적용합니다\.?$/, "").trim()
     : DEFAULT_STYLE;

@@ -55,7 +55,7 @@ function App() {
       setProject(draft);
       setProjects((items) => [draft, ...items]);
       setPerson(draft.person);
-      setNotice(`${draft.scenes.length}개 장면을 찾았습니다.`);
+      setNotice(draft.scenes.length ? `${draft.scenes.length}개 장면을 찾았습니다.` : "");
       setStep(2);
     } catch (error) {
       setNotice(`프로젝트 생성 실패: ${String(error)}`);
@@ -140,7 +140,7 @@ function App() {
           <footer className="bottom-bar">
             <button className="btn ghost" onClick={() => setStep((value) => Math.max(0, value - 1))}><ArrowLeft size={17} /> 이전</button>
             <span><Save size={15} /> 변경사항 자동 저장됨</span>
-            {step < 6 && <button className="btn primary" onClick={() => setStep((value) => Math.min(6, value + 1))}>다음 단계 <ArrowRight size={17} /></button>}
+            {step < 6 && <button className="btn primary" disabled={step === 2 && (!project.scenes.length || project.scenes.some((scene) => !scene.prompt.trim()))} onClick={() => setStep((value) => Math.min(6, value + 1))}>다음 단계 <ArrowRight size={17} /></button>}
           </footer>
         )}
       </main>
@@ -193,13 +193,24 @@ function ProjectSetup(props: SetupProps) {
 
 function ParseReview({ project, onChange, onReparse }: { project: ProjectData; onChange: (value: ProjectData) => void; onReparse: () => void }) {
   const set = (patch: Partial<ProjectData>) => onChange({ ...project, ...patch });
+  const editScene = (id: string, patch: Partial<Scene>) => set({ scenes: project.scenes.map((scene) => scene.id === id ? { ...scene, ...patch } : scene) });
+  const addScene = () => {
+    const number = Math.max(0, ...project.scenes.map((scene) => scene.number)) + 1;
+    const scene: Scene = { id: `scene-${String(number).padStart(2, "0")}-${crypto.randomUUID().slice(0, 8)}`, number, title: `장면 ${number}`, duration: 10, caption: "", prompt: "", prompt_history: [], candidates: [], status: "idle" };
+    set({ scenes: [...project.scenes, scene] });
+  };
+  const removeScene = (id: string) => {
+    const scene = project.scenes.find((item) => item.id === id);
+    if (!scene || !window.confirm(`${scene.title} 장면과 선택한 이미지를 목록에서 삭제할까요?`)) return;
+    set({ scenes: project.scenes.filter((item) => item.id !== id) });
+  };
   return <div className="page">
-    <PageHeading eyebrow="PARSE REVIEW" title="제작안을 이렇게 이해했어요" text="이미지 생성 전에 인물 설정과 장면 구성을 한 번 확인해 주세요." />
+    <PageHeading eyebrow="PARSE REVIEW" title="제작안을 이렇게 이해했어요" text="Work 답변의 형식이 달라도 여기서 장면을 직접 추가하거나 수정할 수 있어요." />
     <div className="review-grid">
       <div className="panel"><h3>인물 프로필</h3><textarea className="profile-box" value={project.character_profile.description} onChange={(e) => set({ character_profile: { ...project.character_profile, description: e.target.value } })} /><label className="full-label">공통 스타일<textarea value={project.style_guide} onChange={(e) => set({ style_guide: e.target.value })} /></label></div>
-      <div className="panel scenes-summary"><div className="panel-title"><h3>찾은 장면</h3><span>{project.scenes.length} SCENES</span></div>{project.scenes.map((scene) => <div className="scene-row" key={scene.id}><b>{String(scene.number).padStart(2, "0")}</b><div><strong>{scene.title}</strong><small>{scene.prompt.slice(0, 88)}{scene.prompt.length > 88 ? "…" : ""}</small></div>{scene.duration && <span><Clock3 size={13} /> {scene.duration}초</span>}</div>)}</div>
+      <div className="panel scenes-summary"><div className="panel-title"><h3>찾은 장면</h3><span>{project.scenes.length} SCENES</span></div>{!project.scenes.length && <p className="parse-warning">장면을 자동으로 찾지 못했습니다. 원문을 다시 분석하거나 아래에서 직접 장면을 추가해 주세요.</p>}{project.scenes.map((scene) => <div className="scene-review-item" key={scene.id}><div className="scene-row"><b>{String(scene.number).padStart(2, "0")}</b><div><strong>{scene.title}</strong><small>{scene.prompt ? `${scene.prompt.slice(0, 88)}${scene.prompt.length > 88 ? "…" : ""}` : "이미지 프롬프트를 입력해 주세요"}</small></div>{scene.duration && <span><Clock3 size={13} /> {scene.duration}초</span>}</div><details className="scene-edit"><summary>장면 수정</summary><div className="scene-edit-fields"><label>제목<input aria-label={`장면 ${scene.number} 제목`} value={scene.title} onChange={(event) => editScene(scene.id, { title: event.target.value })} /></label><label>시간 (초)<input aria-label={`장면 ${scene.number} 시간`} type="number" min="1" max="120" value={scene.duration ?? 10} onChange={(event) => editScene(scene.id, { duration: Number(event.target.value) })} /></label><label className="wide">이미지 프롬프트<textarea aria-label={`장면 ${scene.number} 이미지 프롬프트`} value={scene.prompt} onChange={(event) => editScene(scene.id, { prompt: event.target.value })} /></label><label className="wide">영상 자막<textarea aria-label={`장면 ${scene.number} 영상 자막`} value={scene.caption ?? ""} onChange={(event) => editScene(scene.id, { caption: event.target.value })} /></label><button className="text-button danger" onClick={() => removeScene(scene.id)}>이 장면 삭제</button></div></details></div>)}<button className="btn ghost add-scene" onClick={addScene}><Plus size={16} /> 장면 직접 추가</button>{project.scenes.some((scene) => !scene.prompt.trim()) && <p className="parse-warning">빈 이미지 프롬프트를 입력하면 다음 단계로 진행할 수 있습니다.</p>}</div>
     </div>
-    <button className="btn ghost" onClick={onReparse}><RefreshCw size={16} /> 원문 다시 분석</button>
+    <button className="btn ghost" onClick={() => { if (!project.scenes.length || window.confirm("원문을 다시 분석하면 현재 장면 수정 내용이 바뀔 수 있습니다. 계속할까요?")) onReparse(); }}><RefreshCw size={16} /> 원문 다시 분석</button>
   </div>;
 }
 
