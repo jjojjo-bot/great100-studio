@@ -17,6 +17,8 @@ export interface VideoSegment {
   supportStartsAt?: number;
   duration: number;
   motion: Exclude<ImageMotion, "auto">;
+  motionStart?: number;
+  motionEnd?: number;
   musicVolume: number;
   opening?: boolean;
   ending?: boolean;
@@ -56,8 +58,12 @@ export function buildVideoPlan(project: ProjectData): VideoSegment[] {
   const hasEnding = !!project.ending_message.trim() || !!thumbnail;
   const total = OPENING_DURATION + scenes.reduce((sum, scene) => sum + scene.duration, 0) + (hasEnding ? 4 : 0);
   if (total > 900) throw new Error("영상 길이는 15분 이하로 설정해 주세요.");
+  const openingShare = OPENING_DURATION / (OPENING_DURATION + scenes[0].duration);
+  scenes[0].motionStart = openingShare;
+  const opening: VideoSegment = { title: "오프닝", caption: "", imageUrl: scenes[0].imageUrl, duration: OPENING_DURATION,
+    motion: scenes[0].motion, motionEnd: openingShare, musicVolume: scenes[0].musicVolume, opening: true };
   if (hasEnding) scenes.push({ title: "엔딩", caption: project.ending_message.trim(), imageUrl: thumbnail?.preview_url, duration: 4, motion: "none", musicVolume: scenes.at(-1)?.musicVolume ?? 45, ending: true });
-  return [{ title: "오프닝", caption: "", imageUrl: scenes[0].imageUrl, duration: OPENING_DURATION, motion: "zoom-in", musicVolume: scenes[0].musicVolume, opening: true }, ...scenes];
+  return [opening, ...scenes];
 }
 
 type MusicSection = Pick<VideoSegment, "duration" | "musicVolume">;
@@ -155,7 +161,7 @@ export function activeTimedCaption(blocks: CaptionBlock[], seconds: number): str
   return blocks.find((block) => seconds >= block.start_sec && seconds < block.end_sec)?.text || "";
 }
 
-function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null, caption: string, progress: number, person: string, motion: VideoSegment["motion"], emphasis = "", emphasisAge = 0, supportImage: HTMLImageElement | null = null, supportOpacity = 0, supportProgress = 0, opening = false, ending = false) {
+function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null, caption: string, progress: number, person: string, motion: VideoSegment["motion"], emphasis = "", emphasisAge = 0, supportImage: HTMLImageElement | null = null, supportOpacity = 0, supportProgress = 0, openingOpacity = 0, ending = false, captionOpacity = 1) {
   const { width, height } = ctx.canvas;
   ctx.fillStyle = "#172b29";
   ctx.fillRect(0, 0, width, height);
@@ -177,7 +183,8 @@ function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null
     ctx.globalAlpha = 1;
   }
 
-  if (opening) {
+  if (openingOpacity > 0) {
+    ctx.globalAlpha = openingOpacity;
     ctx.fillStyle = "rgba(18, 41, 36, 0.53)";
     ctx.fillRect(0, 0, width, height);
     ctx.textAlign = "center";
@@ -190,6 +197,7 @@ function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null
     ctx.font = "bold 76px sans-serif";
     ctx.fillText(person, width / 2, height / 2 + 30, width - 160);
     ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
   }
 
   if (ending) {
@@ -249,6 +257,7 @@ function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null
   if (!lines.length) return;
   if (lines.length > 2) lines = [lines[0], lines.slice(1).join(" ")];
   const lineHeight = fontSize + 15;
+  ctx.globalAlpha = captionOpacity;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.lineWidth = 5;
@@ -264,6 +273,7 @@ function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null
   });
   ctx.shadowBlur = 0;
   ctx.shadowOffsetY = 0;
+  ctx.globalAlpha = 1;
 }
 
 async function loadImage(url: string): Promise<HTMLImageElement> {
@@ -347,7 +357,10 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
         const fadeDuration = Math.min(0.6, segment.duration / 8);
         const supportOpacity = supportImage ? Math.max(0, Math.min(1, (seconds - supportStart) / fadeDuration)) : 0;
         const supportProgress = supportImage ? Math.max(0, Math.min(1, (seconds - supportStart) / Math.max(0.01, segment.duration - supportStart))) : 0;
-        drawFrame(ctx, image, part, progress, project.person, segment.motion, segment.emphasisSubtitle && seconds < 3 ? segment.emphasisSubtitle : "", seconds, supportImage, supportOpacity, supportProgress, !!segment.opening, !!segment.ending);
+        const motionProgress = (segment.motionStart ?? 0) + progress * ((segment.motionEnd ?? 1) - (segment.motionStart ?? 0));
+        const openingOpacity = segment.opening ? Math.min(1, (1 - progress) * segment.duration / 0.8) : 0;
+        const captionOpacity = segmentIndex === 1 ? Math.min(1, seconds / 0.5) : 1;
+        drawFrame(ctx, image, part, motionProgress, project.person, segment.motion, segment.emphasisSubtitle && seconds < 3 ? segment.emphasisSubtitle : "", seconds, supportImage, supportOpacity, supportProgress, openingOpacity, !!segment.ending, captionOpacity);
         await source.add(frame / VIDEO_FPS, 1 / VIDEO_FPS);
         frame++;
         if (frame % 7 === 0 || frame === totalFrames) await feedAudioUntil(Math.min(totalFrames / VIDEO_FPS, frame / VIDEO_FPS + 0.5));

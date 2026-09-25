@@ -19,9 +19,10 @@ describe("MP4 제작 계획", () => {
     project.scenes[0].duration = 7;
     project.scenes[0].motion = "pan-right";
     const plan = buildVideoPlan(project);
-    expect(plan[0]).toMatchObject({ opening: true, caption: "", duration: 3, motion: "zoom-in" });
+    expect(plan[0]).toMatchObject({ opening: true, caption: "", duration: 3, motion: "pan-right" });
     expect(plan[0].imageUrl).toBe(plan[1].imageUrl);
-    expect(plan[1]).toMatchObject({ caption: "수정한 자막", duration: 7, motion: "pan-right" });
+    expect(plan[1]).toMatchObject({ caption: "수정한 자막", duration: 7, motion: "pan-right", motionStart: 0.3 });
+    expect(plan[0].motionEnd).toBe(plan[1].motionStart);
     expect(plan[2].motion).toBe("pan-left");
     expect(plan.at(-1)).toMatchObject({ ending: true, duration: 4, motion: "none" });
   });

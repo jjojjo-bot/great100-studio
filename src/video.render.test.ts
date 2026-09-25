@@ -144,6 +144,43 @@ describe("MP4 background music rendering", () => {
     expect(images).toContain("thumbnail-url");
     expect(text).toContain("이순신");
   });
+
+  it("오프닝에서 본문으로 넘어갈 때 배경 움직임은 이어지고 글자만 사라진다", async () => {
+    calls.videoFrames = 0;
+    const positions: Array<[number, number, number, number]> = [];
+    const titleAlphas: Array<{ frame: number; alpha: number }> = [];
+    const captionAlphas: Array<{ frame: number; alpha: number }> = [];
+    vi.stubGlobal("Image", class { naturalWidth = 1920; naturalHeight = 1080; src = ""; decode = async () => {}; });
+    const context = {
+      canvas: null as unknown, fillStyle: "", font: "", textAlign: "", textBaseline: "", globalAlpha: 1,
+      fillRect: () => {},
+      drawImage: (_image: unknown, x: number, y: number, width: number, height: number) => { positions.push([x, y, width, height]); },
+      fillText: (value: string) => {
+        if (value === "오늘의 인물") titleAlphas.push({ frame: calls.videoFrames, alpha: context.globalAlpha });
+        if (value === "본문 시작") captionAlphas.push({ frame: calls.videoFrames, alpha: context.globalAlpha });
+      },
+      measureText: (value: string) => ({ width: value.length * 10 }),
+    };
+    const canvas = { width: 0, height: 0, getContext: () => context };
+    context.canvas = canvas;
+    vi.stubGlobal("document", { createElement: () => canvas });
+    const project = createProjectDraft(2, "이순신", "장군 · 지도자", SAMPLE_WORK_TEXT);
+    project.scenes = [project.scenes[0]];
+    project.scenes[0].duration = 1;
+    project.scenes[0].caption = "본문 시작";
+    project.scenes[0].motion = "pan-right";
+    project.scenes[0].candidates = [{ id: "one", path: "one.png", preview_url: "one-url", created_at: "now", mode: "uploaded" }];
+    project.scenes[0].selected_candidate_id = "one";
+    project.ending_message = "";
+    await renderProjectMp4(project);
+    expect(positions).toHaveLength(60);
+    positions[44].forEach((value, index) => expect(value).toBeCloseTo(positions[45][index], 8));
+    expect(titleAlphas[0]).toMatchObject({ frame: 0, alpha: 1 });
+    expect(titleAlphas.at(-1)!.alpha).toBeLessThan(0.2);
+    expect(titleAlphas.some(({ frame }) => frame >= 45)).toBe(false);
+    expect(captionAlphas[0]).toMatchObject({ frame: 45, alpha: 0 });
+    expect(captionAlphas.at(-1)!.alpha).toBe(1);
+  });
 });
 
 afterEach(() => vi.unstubAllGlobals());

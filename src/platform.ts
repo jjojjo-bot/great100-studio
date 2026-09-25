@@ -6,7 +6,7 @@ import { composeScenePrompt, composeThumbnailPrompt, withFullImagePrompts } from
 import type { BackgroundMusic, GenerateRequest, ImageCandidate, ProjectData, VisualAsset } from "./types";
 
 export const isTauri = () => "__TAURI_INTERNALS__" in window;
-const VIDEO_RENDER_VERSION = 3;
+const VIDEO_RENDER_VERSION = 4;
 
 const database = () => openDB("great100-studio", 3, {
   upgrade(db) {
