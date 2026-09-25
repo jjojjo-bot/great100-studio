@@ -72,8 +72,8 @@ describe("MP4 background music rendering", () => {
     const result = await renderProjectMp4(project);
     expect(result.type).toBe("video/mp4");
     expect(calls.audioTracks).toBe(1);
-    expect(calls.videoFrames).toBe(15);
-    expect(calls.audioBuffers.reduce((sum, buffer) => sum + buffer.length, 0)).toBe(10);
+    expect(calls.videoFrames).toBe(60);
+    expect(calls.audioBuffers.reduce((sum, buffer) => sum + buffer.length, 0)).toBe(40);
     expect(calls.audioBuffers.some((buffer) => buffer.some((sample) => sample > 0))).toBe(true);
   });
 
@@ -103,6 +103,8 @@ describe("MP4 background music rendering", () => {
     project.scenes[0].selected_candidate_id = "one";
     project.ending_message = "";
     await renderProjectMp4(project);
+    expect(drawn).toContain("오늘의 인물");
+    expect(drawn).toContain("이순신");
     expect(drawn).toContain("강조 문구");
     expect(drawn).toContain("앞문장");
     expect(drawn).toContain("뒷문장");

@@ -5,6 +5,7 @@ import type { CaptionBlock, ImageMotion, ProjectData } from "./types";
 export const VIDEO_WIDTH = 1280;
 export const VIDEO_HEIGHT = 720;
 export const VIDEO_FPS = 15;
+export const OPENING_DURATION = 3;
 
 export interface VideoSegment {
   title: string;
@@ -17,6 +18,7 @@ export interface VideoSegment {
   duration: number;
   motion: Exclude<ImageMotion, "auto">;
   musicVolume: number;
+  opening?: boolean;
   ending?: boolean;
 }
 
@@ -52,10 +54,10 @@ export function buildVideoPlan(project: ProjectData): VideoSegment[] {
   const thumbnail = project.thumbnail.candidates.find((candidate) => candidate.id === project.thumbnail.selected_candidate_id);
   if (project.thumbnail.selected_candidate_id && !thumbnail) throw new Error("선택한 썸네일 이미지를 찾지 못했습니다.");
   const hasEnding = !!project.ending_message.trim() || !!thumbnail;
-  const total = scenes.reduce((sum, scene) => sum + scene.duration, 0) + (hasEnding ? 4 : 0);
+  const total = OPENING_DURATION + scenes.reduce((sum, scene) => sum + scene.duration, 0) + (hasEnding ? 4 : 0);
   if (total > 900) throw new Error("영상 길이는 15분 이하로 설정해 주세요.");
   if (hasEnding) scenes.push({ title: "엔딩", caption: project.ending_message.trim(), imageUrl: thumbnail?.preview_url, duration: 4, motion: "none", musicVolume: scenes.at(-1)?.musicVolume ?? 45, ending: true });
-  return scenes;
+  return [{ title: "오프닝", caption: "", imageUrl: scenes[0].imageUrl, duration: OPENING_DURATION, motion: "zoom-in", musicVolume: scenes[0].musicVolume, opening: true }, ...scenes];
 }
 
 type MusicSection = Pick<VideoSegment, "duration" | "musicVolume">;
@@ -153,7 +155,7 @@ export function activeTimedCaption(blocks: CaptionBlock[], seconds: number): str
   return blocks.find((block) => seconds >= block.start_sec && seconds < block.end_sec)?.text || "";
 }
 
-function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null, caption: string, progress: number, person: string, motion: VideoSegment["motion"], emphasis = "", emphasisAge = 0, supportImage: HTMLImageElement | null = null, supportOpacity = 0, supportProgress = 0, ending = false) {
+function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null, caption: string, progress: number, person: string, motion: VideoSegment["motion"], emphasis = "", emphasisAge = 0, supportImage: HTMLImageElement | null = null, supportOpacity = 0, supportProgress = 0, opening = false, ending = false) {
   const { width, height } = ctx.canvas;
   ctx.fillStyle = "#172b29";
   ctx.fillRect(0, 0, width, height);
@@ -173,6 +175,21 @@ function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null
     ctx.globalAlpha = supportOpacity;
     ctx.drawImage(supportImage, placement.x, placement.y, placement.width, placement.height);
     ctx.globalAlpha = 1;
+  }
+
+  if (opening) {
+    ctx.fillStyle = "rgba(18, 41, 36, 0.53)";
+    ctx.fillRect(0, 0, width, height);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.shadowColor = "rgba(13, 32, 27, 0.8)";
+    ctx.shadowBlur = 16;
+    ctx.fillStyle = "#f4dfbd";
+    ctx.font = "bold 36px sans-serif";
+    ctx.fillText("오늘의 인물", width / 2, height / 2 - 70);
+    ctx.font = "bold 76px sans-serif";
+    ctx.fillText(person, width / 2, height / 2 + 30, width - 160);
+    ctx.shadowBlur = 0;
   }
 
   if (ending) {
@@ -330,7 +347,7 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
         const fadeDuration = Math.min(0.6, segment.duration / 8);
         const supportOpacity = supportImage ? Math.max(0, Math.min(1, (seconds - supportStart) / fadeDuration)) : 0;
         const supportProgress = supportImage ? Math.max(0, Math.min(1, (seconds - supportStart) / Math.max(0.01, segment.duration - supportStart))) : 0;
-        drawFrame(ctx, image, part, progress, project.person, segment.motion, segment.emphasisSubtitle && seconds < 3 ? segment.emphasisSubtitle : "", seconds, supportImage, supportOpacity, supportProgress, !!segment.ending);
+        drawFrame(ctx, image, part, progress, project.person, segment.motion, segment.emphasisSubtitle && seconds < 3 ? segment.emphasisSubtitle : "", seconds, supportImage, supportOpacity, supportProgress, !!segment.opening, !!segment.ending);
         await source.add(frame / VIDEO_FPS, 1 / VIDEO_FPS);
         frame++;
         if (frame % 7 === 0 || frame === totalFrames) await feedAudioUntil(Math.min(totalFrames / VIDEO_FPS, frame / VIDEO_FPS + 0.5));

@@ -64,7 +64,7 @@ describe("APP_DATA v2", () => {
     project.scenes.forEach((scene) => { scene.candidates = [candidate]; scene.selected_candidate_id = "choice"; });
     project.thumbnail.candidates = [candidate]; project.thumbnail.selected_candidate_id = "choice";
     expect(completionErrors(project)).toContain("Legacy project — captions missing. v2.1 데이터로 새 프로젝트를 만들어 주세요.");
-    expect(buildVideoPlan(project).reduce((sum, item) => sum + item.duration, 0)).toBe(289);
+    expect(buildVideoPlan(project).reduce((sum, item) => sum + item.duration, 0)).toBe(292);
   });
 
   it("accepts pure v2.1 JSON, separates emphasis subtitle from narration captions, and checks their timing", () => {

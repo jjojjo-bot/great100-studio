@@ -502,7 +502,7 @@ function Complete({ project, onDownload }: { project: ProjectData; onDownload: (
     <div className="complete-mark"><Check size={42} /></div>
     <div className="eyebrow">VIDEO EXPORT</div>
     <h2>{project.person} 편 영상 만들기</h2>
-    <p>장면의 메인·보조 이미지에 줌·이동 효과와 자막{project.background_music ? "·배경음악" : ""}을 넣고, 마지막에 썸네일 배경의 인물 이름 화면을 더합니다. 내레이션 음성은 포함되지 않습니다.</p>
+    <p>첫 장면 이미지를 배경으로 한 3초 타이틀 뒤에 장면의 메인·보조 이미지와 자막{project.background_music ? "·배경음악" : ""}이 이어지고, 마지막에는 썸네일 배경의 인물 이름 화면이 나옵니다. 내레이션 음성은 포함되지 않습니다.</p>
     <div className="summary-cards"><div><span>회차</span><strong>{String(project.episode).padStart(3, "0")}</strong></div><div><span>선택 장면</span><strong>{sceneDone}/{project.scenes.length}</strong></div><div><span>영상 길이</span><strong>{duration ? `${duration}초` : "이미지 확인"}</strong></div></div>
     <div className="folder-tree"><FolderOpen size={22} /><div><strong>{project.project_path}</strong><small>완성 MP4: 05_exports/{project.folder_name}.mp4 · 1280×720 · {project.background_music ? "배경음악 포함" : "무음"}</small></div></div>
     <div className="video-actions"><button className="btn primary export-button" disabled={rendering} onClick={makeVideo}>{rendering ? <LoaderCircle className="spin" size={17} /> : <Download size={17} />}{rendering ? `MP4 만드는 중… ${percent}%` : video ? "MP4 다시 만들기" : "MP4 만들기"}</button>{video && <><button className="btn ghost export-button" onClick={() => downloadBlob(video, `${project.folder_name}.mp4`)}><Download size={17} /> MP4 다시 다운로드</button>{!isTauri() && <button className="btn ghost export-button" onClick={onDownload}><Download size={17} /> MP4 포함 ZIP 다운로드</button>}</>}</div>
