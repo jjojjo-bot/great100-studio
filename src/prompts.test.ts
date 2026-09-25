@@ -12,7 +12,9 @@ describe("copy-ready scene prompt", () => {
     expect(prompt).toContain(project.character_profile.description);
     expect(prompt).toContain(DEFAULT_STYLE);
     expect(prompt).toContain(project.style_guide);
-    expect(prompt).toContain("주인공이 등장하는 장면에만 적용");
+    expect(prompt).toContain("주인공이 등장하면 다음 외형을 유지하고");
+    expect(prompt).not.toContain("공통 기본 스타일:");
+    expect(prompt).not.toContain("이미지 조건:");
   });
 
   it("uses the current profile and style after edits without duplicating exact content", () => {
@@ -23,5 +25,18 @@ describe("copy-ready scene prompt", () => {
     const prompt = composeScenePrompt(project, project.scenes[0]);
     expect(prompt.match(/붉은 관복과 짧은 수염/g)).toHaveLength(1);
     expect(prompt).toContain("흐린 새벽 분위기");
+  });
+
+  it("combines overlapping style guidance without labels or repeated conditions", () => {
+    const project = createProjectDraft(2, "이순신", "장군 · 지도자", SAMPLE_WORK_TEXT);
+    project.style_guide = "공통 이미지 조건: 16:9, 따뜻한 어린이 역사 그림책형 디지털 일러스트, no text, 피와 시신 없음";
+    project.scenes[0].prompt = "조선의 바다, no watermark";
+    const prompt = composeScenePrompt(project, project.scenes[0]);
+    expect(prompt.match(/16:9/g)).toHaveLength(1);
+    expect(prompt.match(/no text/g)).toHaveLength(1);
+    expect(prompt.match(/no watermark/g)).toHaveLength(1);
+    expect(prompt).toContain("피와 시신 없음");
+    expect(prompt).not.toContain("공통 이미지 조건:");
+    expect(prompt).not.toContain("제작안 추가 이미지 조건:");
   });
 });
