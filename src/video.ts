@@ -1,5 +1,5 @@
 import { BufferTarget, CanvasSource, Mp4OutputFormat, Output, Quality, canEncodeVideo } from "mediabunny";
-import type { ProjectData } from "./types";
+import type { ImageMotion, ProjectData } from "./types";
 
 export const VIDEO_WIDTH = 1280;
 export const VIDEO_HEIGHT = 720;
@@ -10,22 +10,46 @@ export interface VideoSegment {
   caption: string;
   imageUrl?: string;
   duration: number;
+  motion: Exclude<ImageMotion, "auto">;
   ending?: boolean;
+}
+
+const AUTO_MOTIONS: VideoSegment["motion"][] = ["zoom-in", "pan-left", "zoom-out", "pan-right", "pan-up", "pan-down"];
+
+export function resolveImageMotion(motion: ImageMotion | undefined, index: number): VideoSegment["motion"] {
+  return motion && motion !== "auto" ? motion : AUTO_MOTIONS[index % AUTO_MOTIONS.length];
 }
 
 export function buildVideoPlan(project: ProjectData): VideoSegment[] {
   if (!project.scenes.length) throw new Error("영상으로 만들 Scene이 없습니다.");
-  const scenes: VideoSegment[] = [...project.scenes].sort((a, b) => a.number - b.number).map((scene) => {
+  const scenes: VideoSegment[] = [...project.scenes].sort((a, b) => a.number - b.number).map((scene, index) => {
     const image = scene.candidates.find((candidate) => candidate.id === scene.selected_candidate_id);
     if (!image) throw new Error(`Scene ${String(scene.number).padStart(2, "0")}의 이미지를 선택해 주세요.`);
     const duration = scene.duration ?? 10;
     if (!Number.isFinite(duration) || duration < 1 || duration > 120) throw new Error(`Scene ${scene.number}의 길이는 1~120초여야 합니다.`);
-    return { title: scene.title, caption: scene.caption ?? scene.title, imageUrl: image.preview_url, duration };
+    return { title: scene.title, caption: scene.caption ?? scene.title, imageUrl: image.preview_url, duration, motion: resolveImageMotion(scene.motion, index) };
   });
   const total = scenes.reduce((sum, scene) => sum + scene.duration, 0) + (project.ending_message.trim() ? 4 : 0);
   if (total > 900) throw new Error("영상 길이는 15분 이하로 설정해 주세요.");
-  if (project.ending_message.trim()) scenes.push({ title: "엔딩", caption: project.ending_message.trim(), duration: 4, ending: true });
+  if (project.ending_message.trim()) scenes.push({ title: "엔딩", caption: project.ending_message.trim(), duration: 4, motion: "none", ending: true });
   return scenes;
+}
+
+export function imagePlacement(imageWidth: number, imageHeight: number, frameWidth: number, frameHeight: number, motion: VideoSegment["motion"], progress: number) {
+  const t = Math.max(0, Math.min(1, progress));
+  const eased = t * t * (3 - 2 * t);
+  const cover = Math.max(frameWidth / imageWidth, frameHeight / imageHeight);
+  const zoom = motion === "zoom-in" ? 1.03 + eased * 0.1 : motion === "zoom-out" ? 1.13 - eased * 0.1 : motion === "none" ? 1 : 1.12;
+  const width = imageWidth * cover * zoom;
+  const height = imageHeight * cover * zoom;
+  const maxX = (width - frameWidth) / 2;
+  const maxY = (height - frameHeight) / 2;
+  const travel = 1 - 2 * eased;
+  const shiftX = Math.min(maxX * 0.9, frameWidth * 0.08) * travel;
+  const shiftY = Math.min(maxY * 0.9, frameHeight * 0.08) * travel;
+  const x = (frameWidth - width) / 2 + (motion === "pan-left" ? shiftX : motion === "pan-right" ? -shiftX : 0);
+  const y = (frameHeight - height) / 2 + (motion === "pan-up" ? shiftY : motion === "pan-down" ? -shiftY : 0);
+  return { x, y, width, height };
 }
 
 function wrapCaption(ctx: CanvasRenderingContext2D, caption: string, maxWidth: number): string[] {
@@ -56,16 +80,13 @@ export function captionParts(caption: string): string[] {
   return parts;
 }
 
-function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null, caption: string, progress: number, person: string) {
+function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null, caption: string, progress: number, person: string, motion: VideoSegment["motion"]) {
   const { width, height } = ctx.canvas;
   ctx.fillStyle = "#172b29";
   ctx.fillRect(0, 0, width, height);
   if (image) {
-    const scale = Math.max(width / image.naturalWidth, height / image.naturalHeight) * (1.02 + progress * 0.045);
-    const drawWidth = image.naturalWidth * scale;
-    const drawHeight = image.naturalHeight * scale;
-    const drift = (progress - 0.5) * 18;
-    ctx.drawImage(image, (width - drawWidth) / 2 + drift, (height - drawHeight) / 2, drawWidth, drawHeight);
+    const placement = imagePlacement(image.naturalWidth, image.naturalHeight, width, height, motion, progress);
+    ctx.drawImage(image, placement.x, placement.y, placement.width, placement.height);
   } else {
     const gradient = ctx.createLinearGradient(0, 0, width, height);
     gradient.addColorStop(0, "#173f39");
@@ -126,9 +147,9 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
       catch { throw new Error(`${segment.title} 이미지를 읽지 못했습니다. 다시 업로드하거나 생성해 주세요.`); }
     }
     for (let localFrame = 0; localFrame < frameCounts[segmentIndex]; localFrame++) {
-      const progress = localFrame / frameCounts[segmentIndex];
+      const progress = frameCounts[segmentIndex] === 1 ? 0 : localFrame / (frameCounts[segmentIndex] - 1);
       const part = captions[segmentIndex][Math.min(captions[segmentIndex].length - 1, Math.floor(progress * captions[segmentIndex].length))];
-      drawFrame(ctx, image, part, progress, project.person);
+      drawFrame(ctx, image, part, progress, project.person, segment.motion);
       await source.add(frame / VIDEO_FPS, 1 / VIDEO_FPS);
       frame++;
       if (frame % 15 === 0 || frame === totalFrames) {

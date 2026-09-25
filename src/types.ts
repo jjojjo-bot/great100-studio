@@ -1,4 +1,5 @@
 export type CandidateStatus = "idle" | "generating" | "ready" | "error";
+export type ImageMotion = "auto" | "zoom-in" | "zoom-out" | "pan-left" | "pan-right" | "pan-up" | "pan-down" | "none";
 
 export interface PromptRevision {
   prompt: string;
@@ -19,6 +20,7 @@ export interface Scene {
   title: string;
   duration?: number;
   caption?: string;
+  motion?: ImageMotion;
   prompt: string;
   full_prompt?: string;
   prompt_history: PromptRevision[];

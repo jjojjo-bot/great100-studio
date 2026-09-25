@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createProjectDraft } from "./parser";
 import { SAMPLE_WORK_TEXT } from "./sample";
-import { buildVideoPlan, captionParts } from "./video";
+import { buildVideoPlan, captionParts, imagePlacement, resolveImageMotion } from "./video";
 
 describe("MP4 제작 계획", () => {
   it("requires a selected image for every scene", () => {
@@ -17,9 +17,11 @@ describe("MP4 제작 계획", () => {
     });
     project.scenes[0].caption = "수정한 자막";
     project.scenes[0].duration = 7;
+    project.scenes[0].motion = "pan-right";
     const plan = buildVideoPlan(project);
-    expect(plan[0]).toMatchObject({ caption: "수정한 자막", duration: 7 });
-    expect(plan.at(-1)).toMatchObject({ ending: true, duration: 4 });
+    expect(plan[0]).toMatchObject({ caption: "수정한 자막", duration: 7, motion: "pan-right" });
+    expect(plan[1].motion).toBe("pan-left");
+    expect(plan.at(-1)).toMatchObject({ ending: true, duration: 4, motion: "none" });
   });
 
   it("긴 내레이션을 빠짐없이 짧은 자막들로 나눈다", () => {
@@ -28,5 +30,31 @@ describe("MP4 제작 계획", () => {
     expect(parts.length).toBeGreaterThan(1);
     expect(parts.join(" ")).toBe(original);
     expect(parts.every((part) => part.length <= 62)).toBe(true);
+  });
+
+  it("자동 효과는 장면마다 줌과 이동을 순환한다", () => {
+    expect(Array.from({ length: 6 }, (_, index) => resolveImageMotion("auto", index))).toEqual([
+      "zoom-in", "pan-left", "zoom-out", "pan-right", "pan-up", "pan-down",
+    ]);
+  });
+
+  it("줌과 이동 중에도 이미지가 프레임 전체를 덮는다", () => {
+    for (const [imageWidth, imageHeight] of [[1920, 1080], [1000, 1000], [720, 1280]]) {
+      for (const motion of ["zoom-in", "zoom-out", "pan-left", "pan-right", "pan-up", "pan-down", "none"] as const) {
+        for (const progress of [0, 0.5, 1]) {
+          const placement = imagePlacement(imageWidth, imageHeight, 1280, 720, motion, progress);
+          expect(placement.x).toBeLessThanOrEqual(0.001);
+          expect(placement.y).toBeLessThanOrEqual(0.001);
+          expect(placement.x + placement.width).toBeGreaterThanOrEqual(1279.999);
+          expect(placement.y + placement.height).toBeGreaterThanOrEqual(719.999);
+        }
+      }
+    }
+    expect(imagePlacement(1920, 1080, 1280, 720, "zoom-in", 1).width).toBeGreaterThan(imagePlacement(1920, 1080, 1280, 720, "zoom-in", 0).width);
+    expect(imagePlacement(1920, 1080, 1280, 720, "zoom-out", 1).width).toBeLessThan(imagePlacement(1920, 1080, 1280, 720, "zoom-out", 0).width);
+    expect(imagePlacement(1920, 1080, 1280, 720, "pan-left", 1).x).toBeLessThan(imagePlacement(1920, 1080, 1280, 720, "pan-left", 0).x);
+    const tallStart = imagePlacement(720, 1280, 1280, 720, "pan-up", 0);
+    const tallEnd = imagePlacement(720, 1280, 1280, 720, "pan-up", 1);
+    expect(tallStart.y - tallEnd.y).toBeCloseTo(720 * 0.16, 5);
   });
 });
