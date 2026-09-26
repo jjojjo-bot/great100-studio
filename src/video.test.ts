@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createProjectDraft } from "./parser";
 import { SAMPLE_WORK_TEXT } from "./sample";
-import { activeTimedCaption, buildVideoPlan, captionParts, imagePlacement, musicGainAtTime, resolveImageMotion, resolveVideoIntroImage, sceneMusicVolume, sceneTiming } from "./video";
+import { activeTimedCaption, buildSceneSegment, buildVideoPlan, captionParts, imagePlacement, musicGainAtTime, resolveImageMotion, resolveVideoIntroImage, sceneMusicVolume, sceneTiming } from "./video";
 
 describe("MP4 제작 계획", () => {
   it("requires a selected image for every scene", () => {
@@ -106,6 +106,22 @@ describe("MP4 제작 계획", () => {
     expect(activeTimedCaption(blocks, 1)).toBe("첫 의미 단위");
     expect(activeTimedCaption(blocks, 3)).toBe("두 번째 의미 단위");
     expect(activeTimedCaption(blocks, 6)).toBe("");
+  });
+
+  it("씬 미리보기 계획은 다른 씬 선택 없이 자막 시간을 씬 기준으로 변환한다", () => {
+    const project = createProjectDraft(2, "세종대왕", "왕", SAMPLE_WORK_TEXT);
+    project.schema_version = "2.1";
+    const scene = project.scenes[0];
+    scene.start_sec = 19;
+    scene.end_sec = 38;
+    scene.duration = 19;
+    scene.narration = "여러분에게 하고 싶은 말이 있어요.";
+    scene.captions = [{ text: "여러분에게 하고 싶은 말이 있어요.", start_sec: 19, end_sec: 23.5 }];
+    scene.candidates = [{ id: "clip", path: "clip.mp4", preview_url: "poster", created_at: "now", mode: "uploaded", media_type: "video", duration_sec: 10 }];
+    scene.selected_candidate_id = "clip";
+    const segment = buildSceneSegment(project, scene, 0);
+    expect(segment.timedCaptions).toEqual([{ text: "여러분에게 하고 싶은 말이 있어요.", start_sec: 0, end_sec: 4.5 }]);
+    expect(activeTimedCaption(segment.timedCaptions!, 3)).toBe("여러분에게 하고 싶은 말이 있어요.");
   });
 
   it("자동 효과는 장면마다 줌과 이동을 순환한다", () => {

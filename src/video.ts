@@ -55,31 +55,33 @@ export function sceneTiming(scene: Scene, videoDuration?: number, hasIntro = fal
   return { intro, trimStart, trimEnd, supportStart };
 }
 
+export function buildSceneSegment(project: ProjectData, scene: Scene, index: number): VideoSegment {
+  const image = scene.candidates.find((candidate) => candidate.id === scene.selected_candidate_id);
+  if (!image) throw new Error(`Scene ${String(scene.number).padStart(2, "0")}의 이미지 또는 동영상을 선택해 주세요.`);
+  const support = scene.support_candidates?.find((candidate) => candidate.id === scene.support_selected_candidate_id);
+  if (scene.support_selected_candidate_id && !support) throw new Error(`Scene ${String(scene.number).padStart(2, "0")}의 선택한 보조 이미지를 찾지 못했습니다.`);
+  const duration = scene.duration ?? 10;
+  if (!Number.isFinite(duration) || duration < 1 || duration > 120) throw new Error(`Scene ${scene.number}의 길이는 1~120초여야 합니다.`);
+  const intro = image.media_type === "video" ? resolveVideoIntroImage(scene) : undefined;
+  const timing = sceneTiming(scene, image.media_type === "video" ? image.duration_sec : undefined, !!intro, !!support);
+  return { title: scene.title, sceneId: scene.id, caption: project.schema_version === "2.1" ? scene.narration || "" : scene.caption ?? scene.title,
+    timedCaptions: project.schema_version === "2.1" ? scene.captions?.map((block) => ({ ...block, start_sec: block.start_sec - (scene.start_sec || 0), end_sec: block.end_sec - (scene.start_sec || 0) })) : undefined,
+    emphasisSubtitle: project.schema_version === "2.1" ? scene.subtitle : undefined,
+    imageUrl: intro?.preview_url || image.preview_url, videoCandidateId: image.media_type === "video" ? image.id : undefined,
+    videoIntroDuration: intro ? timing.intro : undefined,
+    videoTrimStart: image.media_type === "video" ? timing.trimStart : undefined,
+    videoTrimEnd: image.media_type === "video" ? timing.trimEnd : undefined,
+    supportImageUrl: support?.preview_url, supportStartsAt: timing.supportStart,
+    duration, motion: resolveImageMotion(scene.motion, index), musicVolume: sceneMusicVolume(scene.music_volume) };
+}
+
 export function buildVideoPlan(project: ProjectData): VideoSegment[] {
   if (!project.scenes.length) throw new Error("영상으로 만들 Scene이 없습니다.");
   if (project.schema_version === "2.1") {
     const errors = reportForProject(project).errors;
     if (errors.length) throw new Error(errors[0]);
   }
-  const scenes: VideoSegment[] = [...project.scenes].sort((a, b) => a.number - b.number).map((scene, index) => {
-    const image = scene.candidates.find((candidate) => candidate.id === scene.selected_candidate_id);
-    if (!image) throw new Error(`Scene ${String(scene.number).padStart(2, "0")}의 이미지 또는 동영상을 선택해 주세요.`);
-    const support = scene.support_candidates?.find((candidate) => candidate.id === scene.support_selected_candidate_id);
-    if (scene.support_selected_candidate_id && !support) throw new Error(`Scene ${String(scene.number).padStart(2, "0")}의 선택한 보조 이미지를 찾지 못했습니다.`);
-    const duration = scene.duration ?? 10;
-    if (!Number.isFinite(duration) || duration < 1 || duration > 120) throw new Error(`Scene ${scene.number}의 길이는 1~120초여야 합니다.`);
-    const intro = image.media_type === "video" ? resolveVideoIntroImage(scene) : undefined;
-    const timing = sceneTiming(scene, image.media_type === "video" ? image.duration_sec : undefined, !!intro, !!support);
-    return { title: scene.title, sceneId: scene.id, caption: project.schema_version === "2.1" ? scene.narration || "" : scene.caption ?? scene.title,
-      timedCaptions: project.schema_version === "2.1" ? scene.captions?.map((block) => ({ ...block, start_sec: block.start_sec - (scene.start_sec || 0), end_sec: block.end_sec - (scene.start_sec || 0) })) : undefined,
-      emphasisSubtitle: project.schema_version === "2.1" ? scene.subtitle : undefined,
-      imageUrl: intro?.preview_url || image.preview_url, videoCandidateId: image.media_type === "video" ? image.id : undefined,
-      videoIntroDuration: intro ? timing.intro : undefined,
-      videoTrimStart: image.media_type === "video" ? timing.trimStart : undefined,
-      videoTrimEnd: image.media_type === "video" ? timing.trimEnd : undefined,
-      supportImageUrl: support?.preview_url, supportStartsAt: timing.supportStart,
-      duration, motion: resolveImageMotion(scene.motion, index), musicVolume: sceneMusicVolume(scene.music_volume) };
-  });
+  const scenes: VideoSegment[] = [...project.scenes].sort((a, b) => a.number - b.number).map((scene, index) => buildSceneSegment(project, scene, index));
   const thumbnail = project.thumbnail.candidates.find((candidate) => candidate.id === project.thumbnail.selected_candidate_id);
   if (project.thumbnail.selected_candidate_id && !thumbnail) throw new Error("선택한 썸네일 이미지를 찾지 못했습니다.");
   const hasEnding = !!project.ending_message.trim() || !!thumbnail;

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getBackgroundMusic, getSceneNarration, getSceneVideo } from "./platform";
-import { activeTimedCaption, buildVideoPlan, captionParts, drawFrame, musicGainAtTime, VIDEO_HEIGHT, VIDEO_WIDTH, type VideoSegment } from "./video";
+import { activeTimedCaption, buildSceneSegment, buildVideoPlan, captionParts, drawFrame, musicGainAtTime, VIDEO_HEIGHT, VIDEO_WIDTH, type VideoSegment } from "./video";
 import type { ProjectData } from "./types";
 
 type Media = { image: HTMLImageElement | null; support: HTMLImageElement | null; video: HTMLVideoElement | null; narration: HTMLAudioElement | null };
@@ -13,10 +13,18 @@ const loadImage = async (url?: string) => {
   return image;
 };
 
-export function FullVideoPreview({ project }: { project: ProjectData }) {
-  const planResult = useMemo(() => { try { return { plan: buildVideoPlan(project), error: "" }; } catch (error) { return { plan: [] as VideoSegment[], error: String(error) }; } }, [project]);
+export function FullVideoPreview({ project, sceneId }: { project: ProjectData; sceneId?: string }) {
+  const planResult = useMemo(() => { try {
+    const scene = sceneId ? project.scenes.find((item) => item.id === sceneId) : undefined;
+    if (sceneId && !scene) throw new Error("장면을 찾지 못했습니다.");
+    return { plan: scene ? [buildSceneSegment(project, scene, Math.max(0, scene.number - 1))] : buildVideoPlan(project), error: "" };
+  } catch (error) { return { plan: [] as VideoSegment[], error: String(error) }; } }, [project, sceneId]);
   const plan = planResult.plan;
   const total = plan.reduce((sum, segment) => sum + segment.duration, 0);
+  const mediaKey = useMemo(() => JSON.stringify({ project: project.id, sceneId, music: project.background_music?.path, assets: plan.map((segment) => {
+    const scene = project.scenes.find((item) => item.id === segment.sceneId);
+    return [segment.imageUrl, segment.supportImageUrl, segment.videoCandidateId, scene?.narration_audio?.path];
+  }) }), [project, sceneId, plan]);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const mediaRef = useRef<Media[]>([]);
   const musicRef = useRef<HTMLAudioElement | null>(null);
@@ -24,6 +32,7 @@ export function FullVideoPreview({ project }: { project: ProjectData }) {
   const playbackStartRef = useRef(0);
   const playingRef = useRef(false);
   const rafRef = useRef(0);
+  const renderRef = useRef<(time: number) => void>(() => {});
   const [position, setPosition] = useState(0);
   const [ready, setReady] = useState(false);
   const [playing, setPlaying] = useState(false);
@@ -70,11 +79,13 @@ export function FullVideoPreview({ project }: { project: ProjectData }) {
       if (playingRef.current && music.paused) void music.play().catch(() => {});
     }
   };
+  renderRef.current = renderAt;
 
   useEffect(() => {
     if (!plan.length) return;
     let cancelled = false;
     const urls: string[] = [];
+    playingRef.current = false; setPlaying(false); cancelAnimationFrame(rafRef.current);
     setReady(false); setError(""); setPosition(0); positionRef.current = 0;
     const load = async () => {
       const media: Media[] = [];
@@ -91,7 +102,7 @@ export function FullVideoPreview({ project }: { project: ProjectData }) {
           const url = URL.createObjectURL(blob); urls.push(url);
           video = document.createElement("video"); video.src = url; video.muted = true; video.preload = "auto"; video.playsInline = true;
           await new Promise<void>((resolve, reject) => { video!.onloadeddata = () => resolve(); video!.onerror = () => reject(new Error("동영상을 읽지 못했습니다.")); });
-          video.onseeked = () => { if (!cancelled) renderAt(positionRef.current); };
+          video.onseeked = () => { if (!cancelled) renderRef.current(positionRef.current); };
         }
         if (scene?.narration_audio) {
           const blob = await getSceneNarration(project, scene);
@@ -110,7 +121,7 @@ export function FullVideoPreview({ project }: { project: ProjectData }) {
       if (cancelled) { media.forEach((item) => { item.video?.pause(); item.narration?.pause(); }); return; }
       mediaRef.current = media;
       setReady(true);
-      requestAnimationFrame(() => renderAt(0));
+      requestAnimationFrame(() => renderRef.current(0));
     };
     void load().catch((cause) => { if (!cancelled) setError(String(cause)); });
     return () => {
@@ -119,16 +130,18 @@ export function FullVideoPreview({ project }: { project: ProjectData }) {
       mediaRef.current = []; musicRef.current?.pause(); musicRef.current = null;
       urls.forEach((url) => URL.revokeObjectURL(url));
     };
-  // Assets and settings are refreshed when the review page is reopened.
+  // Media is reloaded only when a selected file changes; text and timing edits redraw in place.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project.id]);
+  }, [mediaKey]);
+
+  useEffect(() => { if (ready && plan.length) renderRef.current(positionRef.current); }, [plan, ready]);
 
   const seek = (time: number) => {
     positionRef.current = clamp(time, 0, total);
     if (playingRef.current) playbackStartRef.current = performance.now() - positionRef.current * 1000;
     setPosition(positionRef.current);
     if (musicRef.current) musicRef.current.currentTime = positionRef.current % (musicRef.current.duration || 1);
-    renderAt(positionRef.current);
+    renderRef.current(positionRef.current);
   };
   const toggle = () => {
     if (playingRef.current) { playingRef.current = false; setPlaying(false); musicRef.current?.pause(); mediaRef.current.forEach((item) => { item.narration?.pause(); item.video?.pause(); }); cancelAnimationFrame(rafRef.current); return; }
@@ -137,15 +150,16 @@ export function FullVideoPreview({ project }: { project: ProjectData }) {
     playbackStartRef.current = performance.now() - positionRef.current * 1000;
     const tick = () => {
       const next = Math.min(total, (performance.now() - playbackStartRef.current) / 1000);
-      positionRef.current = next; setPosition(next); renderAt(next);
+      positionRef.current = next; setPosition(next); renderRef.current(next);
       if (next < total && playingRef.current) rafRef.current = requestAnimationFrame(tick);
       else { playingRef.current = false; setPlaying(false); musicRef.current?.pause(); mediaRef.current.forEach((item) => { item.narration?.pause(); item.video?.pause(); }); }
     };
     rafRef.current = requestAnimationFrame(tick);
   };
-  if (planResult.error) return <div className="panel"><strong>전체 영상 미리보기</strong><p>장면과 썸네일을 모두 선택하면 재생할 수 있습니다. {planResult.error}</p></div>;
-  return <div className="panel full-video-preview"><div><strong>MP4 만들기 전 전체 미리보기</strong><small>장면 전환·자막·배경음악·녹음을 재생하며 확인하세요.</small></div><canvas ref={canvasRef} width={VIDEO_WIDTH} height={VIDEO_HEIGHT} aria-label="전체 영상 미리보기 화면" />
-    <div className="preview-controls"><button className="btn primary" disabled={!ready} onClick={toggle}>{playing ? "일시정지" : "재생"}</button><input aria-label="전체 영상 위치" type="range" min="0" max={total} step="0.05" value={position} disabled={!ready} onChange={(event) => seek(Number(event.target.value))} /><span>{position.toFixed(1)} / {total.toFixed(1)}초</span></div>
+  const title = sceneId ? "이 장면의 자막·영상 미리보기" : "MP4 만들기 전 전체 미리보기";
+  if (planResult.error) return <div className="panel"><strong>{title}</strong><p>{sceneId ? "이 장면의 이미지 또는 동영상을 선택하면 재생할 수 있습니다." : "장면과 썸네일을 모두 선택하면 재생할 수 있습니다."} {planResult.error}</p></div>;
+  return <div className="panel full-video-preview"><div><strong>{title}</strong><small>{sceneId ? "이 장면의 자막·화면·녹음을 함께 확인하세요. 자막 시간을 바꾸면 이 화면에 바로 반영됩니다." : "장면 전환·자막·배경음악·녹음을 재생하며 확인하세요."}</small></div><canvas ref={canvasRef} width={VIDEO_WIDTH} height={VIDEO_HEIGHT} aria-label={sceneId ? "장면 자막 영상 미리보기 화면" : "전체 영상 미리보기 화면"} />
+    <div className="preview-controls"><button className="btn primary" disabled={!ready} onClick={toggle}>{playing ? "일시정지" : "재생"}</button><input aria-label={sceneId ? "장면 미리보기 위치" : "전체 영상 위치"} type="range" min="0" max={total} step="0.05" value={position} disabled={!ready} onChange={(event) => seek(Number(event.target.value))} /><span>{position.toFixed(1)} / {total.toFixed(1)}초</span></div>
     {!ready && !error && <small>영상 자료를 불러오는 중…</small>}{error && <div className="error-banner">미리보기를 열지 못했습니다: {error}</div>}
   </div>;
 }

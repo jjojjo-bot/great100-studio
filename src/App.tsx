@@ -26,7 +26,7 @@ import {
 import { createProjectDraft, DEFAULT_STYLE, parseWorkText } from "./parser";
 import { completionErrors, createV2ProjectDraft, parseAppData, reportForProject } from "./app-data";
 import { composeScenePrompt, composeThumbnailPrompt } from "./prompts";
-import { createProjectOnDisk, deleteCandidateAsset, deleteProject, downloadBlob, exportProjectZip, generateImages, getAccessCode, getBackgroundMusic, getRenderedVideo, getSceneVideo, importImageCandidates, importSceneVideo, isTauri, listProjects, removeBackgroundMusic, removeSceneNarration, saveBackgroundMusic, saveProject, saveRenderedVideo, setAccessCode } from "./platform";
+import { createProjectOnDisk, deleteCandidateAsset, deleteProject, downloadBlob, exportProjectZip, generateImages, getAccessCode, getBackgroundMusic, getRenderedVideo, importImageCandidates, importSceneVideo, isTauri, listProjects, removeBackgroundMusic, removeSceneNarration, saveBackgroundMusic, saveProject, saveRenderedVideo, setAccessCode } from "./platform";
 import { findCandidate, withoutAssetCandidate, withoutSceneCandidate } from "./candidates";
 import { buildVideoPlan, renderProjectMp4, resolveVideoIntroImage, sceneMusicVolume } from "./video";
 import { SceneNarrationPanel } from "./SceneNarrationPanel";
@@ -483,11 +483,11 @@ function SceneStudio({ project, onChange, onProjectChange }: { project: ProjectD
     <div className="panel full-prompt-panel"><div className="full-prompt-head"><div><strong>복사용 전체 이미지 프롬프트</strong><small>장면 내용 + 인물 외형 기준 + 공통 스타일이 항상 함께 들어갑니다.</small></div><button className="btn ghost" disabled={!scene.prompt.trim()} onClick={copyFullPrompt}>{copied ? <Check size={16} /> : <Copy size={16} />}{copied ? "복사됨" : "전체 프롬프트 복사"}</button></div><textarea aria-label="복사용 전체 이미지 프롬프트" readOnly value={fullPrompt} /></div>
     {project.schema_version === "2.1" ? <V21CaptionEditor scene={scene} onChange={onChange} /> : <div className="panel caption-panel"><label><strong>영상 자막</strong><small>이 문장이 장면 이미지 위에 표시됩니다.</small><textarea aria-label="영상 자막" value={scene.caption ?? scene.title} onChange={(event) => onChange({ ...scene, caption: event.target.value })} /></label><label className="duration-label"><strong>표시 시간 (초)</strong><input aria-label="장면 표시 시간" type="number" min="1" max="120" step="1" disabled={project.schema_version === "2.0"} title={project.schema_version === "2.0" ? "v2 시간은 APP_DATA의 시작·종료 시간을 따릅니다." : undefined} value={scene.duration ?? 10} onChange={(event) => onChange({ ...scene, duration: Number(event.target.value) })} /></label><label className="motion-label"><strong>이미지 효과</strong><small>MP4에 적용됩니다.</small><select aria-label="이미지 효과" value={scene.motion ?? "auto"} onChange={(event) => onChange({ ...scene, motion: event.target.value as ImageMotion })}><option value="auto">자동 (장면마다 다르게)</option><option value="zoom-in">천천히 줌인</option><option value="zoom-out">천천히 줌아웃</option><option value="pan-left">왼쪽으로 이동</option><option value="pan-right">오른쪽으로 이동</option><option value="pan-up">위로 이동</option><option value="pan-down">아래로 이동</option><option value="none">효과 없음</option></select></label></div>}
     <SceneNarrationPanel key={scene.id} project={project} scene={scene} onChange={onChange} />
+    {scene.selected_candidate_id && <FullVideoPreview project={project} sceneId={scene.id} />}
     <div className="panel music-volume-panel"><label><strong>이 장면의 배경음악 볼륨</strong><small>{project.background_music ? "장면이 바뀔 때 볼륨도 부드럽게 바뀝니다." : "음악을 추가하면 이 설정이 적용됩니다."}</small><input aria-label="장면 배경음악 볼륨" type="range" min="0" max="100" step="1" value={sceneMusicVolume(scene.music_volume)} onChange={(event) => onChange({ ...scene, music_volume: Number(event.target.value) })} /></label><output>{sceneMusicVolume(scene.music_volume)}%</output></div>
     {error && <div className="error-banner">{error}</div>}
     <CandidateGrid candidates={scene.candidates} selected={scene.selected_candidate_id} onSelect={(id) => onChange({ ...scene, selected_candidate_id: id })} onDelete={(id) => removeCandidate(id)} emptyLabel="이 장면의 이미지나 동영상을 업로드해 보세요" />
     {selectedVideo && introImages.length > 0 && <div className="panel video-intro-panel"><div><strong>동영상 앞에 보여줄 이미지</strong><small>장면 시간 안에서 최대 1.5초 표시한 뒤 0.3초 동안 동영상으로 부드럽게 전환됩니다. 자막은 두 화면 모두에 표시됩니다.</small></div><div className="video-intro-choice"><select aria-label="동영상 앞 이미지" value={scene.video_intro_candidate_id === null ? "none" : scene.video_intro_candidate_id ?? "auto"} onChange={(event) => onChange({ ...scene, video_intro_candidate_id: event.target.value === "none" ? null : event.target.value === "auto" ? undefined : event.target.value })}><option value="auto">자동 · 최근 업로드 이미지</option><option value="none">이미지 없이 동영상만</option>{introImages.map((candidate, index) => <option key={candidate.id} value={candidate.id}>이미지 후보 {index + 1}{candidate.mode === "uploaded" ? " · 업로드" : ""}</option>)}</select>{introImage && <img src={introImage.preview_url} alt="동영상 앞에 표시할 이미지" />}</div></div>}
-    {selectedVideo && <SceneVideoPreview project={project} scene={scene} candidate={scene.candidates.find((candidate) => candidate.id === scene.selected_candidate_id)!} />}
     <SceneTimingPanel scene={scene} onChange={onChange} />
     {project.schema_version !== 1 && (scene.support_image_prompt || scene.support_candidates?.length) && <><div className="panel support-panel"><h3>보조 이미지 · 별도 생성</h3><p className="support-hint">선택한 보조 이미지는 이 장면의 후반부에 부드럽게 전환되어 MP4에 들어갑니다.</p><textarea aria-label="보조 이미지 프롬프트" value={scene.support_image_prompt || ""} onChange={(event) => onChange({ ...scene, support_image_prompt: event.target.value })} /><div className="prompt-actions"><label className="btn ghost support-upload">보조 이미지 업로드<input type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => { const files = Array.from(event.target.files || []); event.target.value = ""; if (files.length) void uploadSupport(files); }} /></label><button className="btn primary" disabled={supportBusy} onClick={generateSupport}>{supportBusy ? "처리 중…" : "보조 후보 2장 생성"}</button></div></div><CandidateGrid candidates={scene.support_candidates || []} selected={scene.support_selected_candidate_id} onSelect={(id) => onChange({ ...scene, support_selected_candidate_id: id })} onDelete={(id) => removeCandidate(id, true)} emptyLabel="보조 이미지는 선택 사항입니다" /></>}
   </div>;
@@ -522,22 +522,6 @@ function CandidateGrid({ candidates, selected, onSelect, onDelete, emptyLabel }:
   };
   if (!candidates.length) return <div className="candidate-empty"><ImageIcon size={30} /><strong>{emptyLabel}</strong><span>접근 코드가 없으면 생성 버튼은 mock 미리보기를 만듭니다.</span></div>;
   return <><div className="candidate-grid">{candidates.map((candidate, index) => <div key={candidate.id} className="candidate-card"><button className={`candidate ${selected === candidate.id ? "selected" : ""}`} disabled={!!deletingId} onClick={() => onSelect(candidate.id)}><img src={candidate.preview_url} alt={`후보 ${index + 1}`} /><span className="candidate-label">후보 {index + 1}</span><span className="mode-label">{candidate.media_type === "video" ? `동영상 · ${candidate.duration_sec?.toFixed(1)}초` : candidate.mode === "uploaded" ? "업로드" : candidate.mode}</span>{selected === candidate.id && <i><CheckCircle2 size={22} /> 선택됨</i>}</button>{onDelete && <button className="candidate-delete" aria-label={`후보 ${index + 1} 삭제`} title={`${candidate.media_type === "video" ? "동영상" : "이미지"} 후보 삭제`} disabled={!!deletingId} onClick={() => void remove(candidate, index)}>{deletingId === candidate.id ? <LoaderCircle className="spin" size={15} /> : <Trash2 size={15} />}<span>삭제</span></button>}</div>)}</div>{error && <div className="error-banner">{error}</div>}</>;
-}
-
-function SceneVideoPreview({ project, scene, candidate }: { project: ProjectData; scene: Scene; candidate: ImageCandidate }) {
-  const [url, setUrl] = useState("");
-  const [error, setError] = useState("");
-  useEffect(() => {
-    let active = true;
-    let objectUrl = "";
-    getSceneVideo(project, scene, candidate).then((blob) => {
-      if (!blob) throw new Error("동영상 파일을 찾지 못했습니다. 다시 업로드해 주세요.");
-      objectUrl = URL.createObjectURL(blob);
-      if (active) setUrl(objectUrl); else URL.revokeObjectURL(objectUrl);
-    }).catch((cause) => { if (active) setError(String(cause)); });
-    return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [project.id, scene.id, candidate.id]);
-  return <div className="panel scene-video-preview"><strong>선택한 동영상 미리보기</strong>{url && <video controls muted playsInline preload="metadata" src={url} poster={candidate.preview_url} />}{error && <div className="error-banner">{error}</div>}</div>;
 }
 
 function Complete({ project, onDownload }: { project: ProjectData; onDownload: () => void }) {
