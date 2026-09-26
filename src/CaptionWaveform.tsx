@@ -18,6 +18,29 @@ export function moveCaption(blocks: CaptionBlock[], index: number, mode: Drag["m
   return blocks.map((item, position) => position === index ? { ...item, start_sec: start, end_sec: end } : item);
 }
 
+export function redistributeCaptions(blocks: CaptionBlock[], index: number, desiredDuration: number, sceneStart: number, sceneDuration: number): CaptionBlock[] {
+  if (!blocks[index] || !Number.isFinite(desiredDuration)) return blocks;
+  const totalTicks = Math.round(sceneDuration * 10);
+  if (totalTicks < blocks.length) return blocks;
+  const chosenTicks = clamp(Math.round(desiredDuration * 10), 1, totalTicks - blocks.length + 1);
+  const otherIndexes = blocks.map((_, position) => position).filter((position) => position !== index);
+  const remaining = totalTicks - chosenTicks - otherIndexes.length;
+  const weights = otherIndexes.map((position) => Math.max(0.1, blocks[position].end_sec - blocks[position].start_sec));
+  const weightSum = weights.reduce((sum, weight) => sum + weight, 0);
+  const fractional = weights.map((weight) => weight / weightSum * remaining);
+  const extra = fractional.map(Math.floor);
+  let leftover = remaining - extra.reduce((sum, value) => sum + value, 0);
+  const order = otherIndexes.map((_, position) => position).sort((a, b) => (fractional[b] - extra[b]) - (fractional[a] - extra[a]));
+  for (const position of order) { if (!leftover) break; extra[position]++; leftover--; }
+  const ticks = blocks.map((_, position) => position === index ? chosenTicks : 1 + extra[otherIndexes.indexOf(position)]);
+  let cursor = Math.round(sceneStart * 10);
+  return blocks.map((block, position) => {
+    const start_sec = cursor / 10;
+    cursor += ticks[position];
+    return { ...block, start_sec, end_sec: cursor / 10 };
+  });
+}
+
 export function CaptionWaveform({ blob, scene, onChange, playhead = 0 }: { blob?: Blob | null; scene: Scene; onChange: (scene: Scene) => void; playhead?: number }) {
   const [bars, setBars] = useState<number[]>([]);
   const [draft, setDraft] = useState<CaptionBlock[] | null>(null);
@@ -56,7 +79,10 @@ export function CaptionWaveform({ blob, scene, onChange, playhead = 0 }: { blob?
     if (!drag.current || !track.current) return;
     if (!Number.isFinite(event.clientX) || !Number.isFinite(drag.current.x)) return;
     const delta = (event.clientX - drag.current.x) / track.current.getBoundingClientRect().width * duration;
-    const next = moveCaption(drag.current.initial, drag.current.index, drag.current.mode, delta, start, duration);
+    const { initial, index, mode } = drag.current;
+    const next = mode === "move"
+      ? moveCaption(initial, index, mode, delta, start, duration)
+      : redistributeCaptions(initial, index, initial[index].end_sec - initial[index].start_sec + (mode === "start" ? -delta : delta), start, duration);
     draftRef.current = next;
     setDraft(next);
   };
@@ -70,7 +96,7 @@ export function CaptionWaveform({ blob, scene, onChange, playhead = 0 }: { blob?
     drag.current = { index, mode, x: event.clientX, initial: [...blocks] };
     track.current?.setPointerCapture(event.pointerId);
   };
-  return <div className="caption-waveform"><strong>{blob ? "녹음 파형과 자막 시간" : "자막 시간 막대"}</strong><small>자막 막대를 좌우로 끌어 이동하고, 양끝 손잡이로 시작·종료 시간을 조절하세요. 녹음이 없어도 사용할 수 있습니다.</small>
+  return <div className="caption-waveform"><strong>{blob ? "녹음 파형과 자막 시간" : "자막 시간 막대"}</strong><small>양끝 손잡이로 한 자막의 노출 시간을 바꾸면 나머지 자막이 남은 시간을 비율대로 나눠 갖습니다. 가운데를 끌면 해당 자막 위치만 옮깁니다.</small>
     <div className="waveform-track" ref={track} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={() => { drag.current = null; setDraft(null); }}>
       <div className="waveform-bars">{bars.map((height, index) => <i key={index} style={{ height: `${Math.round(height * 100)}%` }} />)}</div>
       {blocks.map((block, index) => <div key={index} className="waveform-caption" style={{ left: `${(block.start_sec - start) / duration * 100}%`, width: `${(block.end_sec - block.start_sec) / duration * 100}%` }} title={`${index + 1}. ${block.text} · ${block.start_sec.toFixed(1)}–${block.end_sec.toFixed(1)}초`} onPointerDown={(event) => begin(event, index, "move")}><span className="waveform-handle" role="slider" aria-label={`자막 ${index + 1} 시작 손잡이`} aria-valuemin={start} aria-valuemax={block.end_sec - 0.1} aria-valuenow={block.start_sec} onPointerDown={(event) => begin(event, index, "start")} /><b>{index + 1}</b><span className="waveform-handle" role="slider" aria-label={`자막 ${index + 1} 종료 손잡이`} aria-valuemin={block.start_sec + 0.1} aria-valuemax={start + duration} aria-valuenow={block.end_sec} onPointerDown={(event) => begin(event, index, "end")} /></div>)}

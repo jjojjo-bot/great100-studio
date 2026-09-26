@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { CaptionWaveform } from "./CaptionWaveform";
 import { createProjectDraft } from "./parser";
@@ -27,6 +27,25 @@ describe("자막 시간 막대", () => {
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ captions: [
       expect.objectContaining({ start_sec: 1, end_sec: 4 }),
       expect.objectContaining({ start_sec: 5, end_sec: 8 }),
+    ] }));
+  });
+
+  it("끝 손잡이를 늘리면 나머지 자막도 자동으로 조절된다", () => {
+    const scene = createProjectDraft(1, "세종대왕", "왕", SAMPLE_WORK_TEXT).scenes[0];
+    scene.start_sec = 0; scene.duration = 10;
+    scene.captions = [{ text: "첫 자막", start_sec: 0, end_sec: 3 }, { text: "두 번째", start_sec: 3, end_sec: 10 }];
+    const onChange = vi.fn();
+    const { container } = render(<CaptionWaveform scene={scene} onChange={onChange} />);
+    const track = container.querySelector(".waveform-track") as HTMLDivElement;
+    track.setPointerCapture = vi.fn();
+    vi.spyOn(track, "getBoundingClientRect").mockReturnValue({ width: 400 } as DOMRect);
+    const handle = within(container).getByRole("slider", { name: "자막 1 종료 손잡이" });
+    fireEvent(handle, new MouseEvent("pointerdown", { bubbles: true, clientX: 120 }));
+    fireEvent(track, new MouseEvent("pointermove", { bubbles: true, clientX: 160 }));
+    fireEvent(track, new MouseEvent("pointerup", { bubbles: true }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ captions: [
+      expect.objectContaining({ start_sec: 0, end_sec: 4 }),
+      expect.objectContaining({ start_sec: 4, end_sec: 10 }),
     ] }));
   });
 });
