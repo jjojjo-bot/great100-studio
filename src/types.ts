@@ -39,6 +39,10 @@ export interface Scene {
   candidates: ImageCandidate[];
   selected_candidate_id?: string;
   video_intro_candidate_id?: string | null;
+  video_intro_duration_sec?: number;
+  video_trim_start_sec?: number;
+  video_trim_end_sec?: number;
+  support_start_sec?: number;
   status: CandidateStatus;
   source_scene_id?: string;
   start_sec?: number;

@@ -55,13 +55,16 @@ describe("장면 MP4 렌더링", () => {
     project.scenes[0].duration = 2;
     project.scenes[0].candidates = [{ id: "clip", path: "candidate_clip.mp4", preview_url: "poster", created_at: "now", mode: "uploaded", media_type: "video", duration_sec: 1 }];
     project.scenes[0].selected_candidate_id = "clip";
+    project.scenes[0].video_trim_start_sec = 0.2;
+    project.scenes[0].video_trim_end_sec = 0.6;
     project.ending_message = "";
     const output = await renderProjectMp4(project);
     expect(output.type).toBe("video/mp4");
     expect(calls.frames).toBe(75); // 3초 오프닝 + 2초 장면
     expect(calls.decodedDraws).toBe(30);
     expect(calls.timestamps).toHaveLength(30);
-    expect(calls.timestamps.at(-1)).toBeCloseTo(0.999);
+    expect(calls.timestamps[0]).toBeCloseTo(0.2);
+    expect(calls.timestamps.at(-1)).toBeCloseTo(0.6);
     expect(calls.disposed).toBe(1);
   });
 

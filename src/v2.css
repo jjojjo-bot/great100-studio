@@ -83,3 +83,26 @@
 .candidate-delete { position: absolute; left: 9px; bottom: 9px; z-index: 2; display: inline-flex; align-items: center; gap: 4px; padding: 6px 9px; border: 1px solid rgba(255,255,255,.7); border-radius: 7px; background: rgba(47,56,50,.84); color: #fff; font-size: 10px; cursor: pointer; }
 .candidate-delete:hover { background: #a34131; }
 .candidate-delete:disabled { opacity: .6; cursor: wait; }
+.scene-timing-panel, .full-video-preview { display: grid; gap: 14px; }
+.scene-timing-panel small, .full-video-preview small, .caption-waveform small { display: block; color: var(--muted, #6f7772); margin-top: 4px; }
+.timing-strip { display: flex; position: relative; height: 34px; overflow: hidden; border-radius: 8px; background: #d6ded7; }
+.timing-strip span { display: grid; place-items: center; min-width: 0; overflow: hidden; white-space: nowrap; color: #fff; font-size: 12px; font-weight: 700; background: #547d70; }
+.timing-strip span:first-child:not(:last-of-type) { background: #c18a58; }
+.timing-strip i { position: absolute; top: 0; bottom: 0; width: 3px; background: #ffd35f; box-shadow: 0 0 0 1px #53431f; }
+.timing-control { display: grid; gap: 5px; }
+.timing-control span { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; }
+.timing-control input { width: 100%; }
+.timing-trim { display: grid; gap: 10px; padding: 12px; border-radius: 8px; background: #f4f5ef; }
+.full-video-preview canvas { width: 100%; aspect-ratio: 16 / 9; border-radius: 10px; background: #172b29; }
+.preview-controls { display: flex; align-items: center; gap: 12px; }
+.preview-controls input { flex: 1; min-width: 40px; }
+.preview-controls span { font-size: 12px; white-space: nowrap; }
+.caption-waveform { width: 100%; display: grid; gap: 6px; padding-top: 12px; border-top: 1px solid #dde3db; }
+.waveform-track { position: relative; height: 80px; border-radius: 8px; overflow: hidden; background: #e6eee8; touch-action: none; }
+.waveform-bars { position: absolute; inset: 0; display: flex; align-items: center; gap: 1px; opacity: .55; }
+.waveform-bars i { flex: 1; min-width: 1px; background: #4e806e; border-radius: 2px; }
+.waveform-caption { position: absolute; top: 8px; height: 64px; display: flex; align-items: center; justify-content: space-between; min-width: 7px; border: 2px solid #ad6e35; border-radius: 5px; color: #563612; background: #efc87999; cursor: grab; user-select: none; z-index: 1; }
+.waveform-caption b { overflow: hidden; font-size: 12px; }
+.waveform-handle { width: 7px; height: 100%; flex: none; background: #ad6e35; cursor: ew-resize; }
+.waveform-playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: #cf3d3d; pointer-events: none; z-index: 2; }
+.waveform-ruler { display: flex; justify-content: space-between; font-size: 11px; color: #6f7772; }

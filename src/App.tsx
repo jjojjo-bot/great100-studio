@@ -30,6 +30,8 @@ import { createProjectOnDisk, deleteCandidateAsset, deleteProject, downloadBlob,
 import { findCandidate, withoutAssetCandidate, withoutSceneCandidate } from "./candidates";
 import { buildVideoPlan, renderProjectMp4, resolveVideoIntroImage, sceneMusicVolume } from "./video";
 import { SceneNarrationPanel } from "./SceneNarrationPanel";
+import { SceneTimingPanel } from "./SceneTimingPanel";
+import { FullVideoPreview } from "./FullVideoPreview";
 import { SAMPLE_WORK_TEXT } from "./sample";
 import type { ImageCandidate, ImageMotion, ProjectData, Scene, VisualAsset } from "./types";
 
@@ -295,6 +297,7 @@ function Preflight({ project }: { project: ProjectData }) {
 function ImageReview({ project }: { project: ProjectData }) {
   const errors = completionErrors(project);
   return <div className="page"><PageHeading eyebrow="FINAL IMAGE REVIEW" title="전체 장면을 한 번 더 확인하세요" text="Scene 순서와 핵심 업적 장면, 썸네일을 검토한 뒤 MP4를 만듭니다." />
+    <FullVideoPreview project={project} />
     <div className="review-image-grid">{project.scenes.map((scene) => {
       const image = scene.candidates.find((candidate) => candidate.id === scene.selected_candidate_id);
       const intro = image?.media_type === "video" ? resolveVideoIntroImage(scene) : undefined;
@@ -485,6 +488,7 @@ function SceneStudio({ project, onChange, onProjectChange }: { project: ProjectD
     <CandidateGrid candidates={scene.candidates} selected={scene.selected_candidate_id} onSelect={(id) => onChange({ ...scene, selected_candidate_id: id })} onDelete={(id) => removeCandidate(id)} emptyLabel="이 장면의 이미지나 동영상을 업로드해 보세요" />
     {selectedVideo && introImages.length > 0 && <div className="panel video-intro-panel"><div><strong>동영상 앞에 보여줄 이미지</strong><small>장면 시간 안에서 최대 1.5초 표시한 뒤 0.3초 동안 동영상으로 부드럽게 전환됩니다. 자막은 두 화면 모두에 표시됩니다.</small></div><div className="video-intro-choice"><select aria-label="동영상 앞 이미지" value={scene.video_intro_candidate_id === null ? "none" : scene.video_intro_candidate_id ?? "auto"} onChange={(event) => onChange({ ...scene, video_intro_candidate_id: event.target.value === "none" ? null : event.target.value === "auto" ? undefined : event.target.value })}><option value="auto">자동 · 최근 업로드 이미지</option><option value="none">이미지 없이 동영상만</option>{introImages.map((candidate, index) => <option key={candidate.id} value={candidate.id}>이미지 후보 {index + 1}{candidate.mode === "uploaded" ? " · 업로드" : ""}</option>)}</select>{introImage && <img src={introImage.preview_url} alt="동영상 앞에 표시할 이미지" />}</div></div>}
     {selectedVideo && <SceneVideoPreview project={project} scene={scene} candidate={scene.candidates.find((candidate) => candidate.id === scene.selected_candidate_id)!} />}
+    <SceneTimingPanel scene={scene} onChange={onChange} />
     {project.schema_version !== 1 && (scene.support_image_prompt || scene.support_candidates?.length) && <><div className="panel support-panel"><h3>보조 이미지 · 별도 생성</h3><p className="support-hint">선택한 보조 이미지는 이 장면의 후반부에 부드럽게 전환되어 MP4에 들어갑니다.</p><textarea aria-label="보조 이미지 프롬프트" value={scene.support_image_prompt || ""} onChange={(event) => onChange({ ...scene, support_image_prompt: event.target.value })} /><div className="prompt-actions"><label className="btn ghost support-upload">보조 이미지 업로드<input type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => { const files = Array.from(event.target.files || []); event.target.value = ""; if (files.length) void uploadSupport(files); }} /></label><button className="btn primary" disabled={supportBusy} onClick={generateSupport}>{supportBusy ? "처리 중…" : "보조 후보 2장 생성"}</button></div></div><CandidateGrid candidates={scene.support_candidates || []} selected={scene.support_selected_candidate_id} onSelect={(id) => onChange({ ...scene, support_selected_candidate_id: id })} onDelete={(id) => removeCandidate(id, true)} emptyLabel="보조 이미지는 선택 사항입니다" /></>}
   </div>;
 }

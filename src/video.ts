@@ -17,6 +17,8 @@ export interface VideoSegment {
   imageUrl?: string;
   videoCandidateId?: string;
   videoIntroDuration?: number;
+  videoTrimStart?: number;
+  videoTrimEnd?: number;
   supportImageUrl?: string;
   supportStartsAt?: number;
   duration: number;
@@ -44,6 +46,15 @@ export function resolveVideoIntroImage(scene: Scene): ImageCandidate | undefined
   return scene.candidates.filter((candidate) => candidate.mode === "uploaded" && candidate.media_type !== "video").at(-1);
 }
 
+export function sceneTiming(scene: Scene, videoDuration?: number, hasIntro = false, hasSupport = false) {
+  const duration = scene.duration ?? 10;
+  const intro = hasIntro ? Math.max(0, Math.min(duration - 0.1, scene.video_intro_duration_sec ?? Math.min(1.5, duration / 4))) : 0;
+  const trimStart = Math.max(0, Math.min(Math.max(0, (videoDuration ?? duration) - 0.1), scene.video_trim_start_sec ?? 0));
+  const trimEnd = Math.max(trimStart + 0.1, Math.min(videoDuration ?? duration, scene.video_trim_end_sec ?? (videoDuration ?? duration)));
+  const supportStart = hasSupport ? Math.max(0, Math.min(duration - 0.1, scene.support_start_sec ?? duration / 2)) : undefined;
+  return { intro, trimStart, trimEnd, supportStart };
+}
+
 export function buildVideoPlan(project: ProjectData): VideoSegment[] {
   if (!project.scenes.length) throw new Error("영상으로 만들 Scene이 없습니다.");
   if (project.schema_version === "2.1") {
@@ -58,12 +69,15 @@ export function buildVideoPlan(project: ProjectData): VideoSegment[] {
     const duration = scene.duration ?? 10;
     if (!Number.isFinite(duration) || duration < 1 || duration > 120) throw new Error(`Scene ${scene.number}의 길이는 1~120초여야 합니다.`);
     const intro = image.media_type === "video" ? resolveVideoIntroImage(scene) : undefined;
+    const timing = sceneTiming(scene, image.media_type === "video" ? image.duration_sec : undefined, !!intro, !!support);
     return { title: scene.title, sceneId: scene.id, caption: project.schema_version === "2.1" ? scene.narration || "" : scene.caption ?? scene.title,
       timedCaptions: project.schema_version === "2.1" ? scene.captions?.map((block) => ({ ...block, start_sec: block.start_sec - (scene.start_sec || 0), end_sec: block.end_sec - (scene.start_sec || 0) })) : undefined,
       emphasisSubtitle: project.schema_version === "2.1" ? scene.subtitle : undefined,
       imageUrl: intro?.preview_url || image.preview_url, videoCandidateId: image.media_type === "video" ? image.id : undefined,
-      videoIntroDuration: intro ? Math.min(1.5, duration / 4) : undefined,
-      supportImageUrl: support?.preview_url, supportStartsAt: support ? duration / 2 : undefined,
+      videoIntroDuration: intro ? timing.intro : undefined,
+      videoTrimStart: image.media_type === "video" ? timing.trimStart : undefined,
+      videoTrimEnd: image.media_type === "video" ? timing.trimEnd : undefined,
+      supportImageUrl: support?.preview_url, supportStartsAt: timing.supportStart,
       duration, motion: resolveImageMotion(scene.motion, index), musicVolume: sceneMusicVolume(scene.music_volume) };
   });
   const thumbnail = project.thumbnail.candidates.find((candidate) => candidate.id === project.thumbnail.selected_candidate_id);
@@ -204,12 +218,12 @@ export function activeTimedCaption(blocks: CaptionBlock[], seconds: number): str
   return blocks.find((block) => seconds >= block.start_sec && seconds < block.end_sec)?.text || "";
 }
 
-function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | HTMLCanvasElement | OffscreenCanvas | null, caption: string, progress: number, person: string, motion: VideoSegment["motion"], emphasis = "", emphasisAge = 0, supportImage: HTMLImageElement | null = null, supportOpacity = 0, supportProgress = 0, openingOpacity = 0, ending = false, captionOpacity = 1, introImage: HTMLImageElement | null = null, introOpacity = 0) {
+export function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | HTMLCanvasElement | OffscreenCanvas | HTMLVideoElement | null, caption: string, progress: number, person: string, motion: VideoSegment["motion"], emphasis = "", emphasisAge = 0, supportImage: HTMLImageElement | null = null, supportOpacity = 0, supportProgress = 0, openingOpacity = 0, ending = false, captionOpacity = 1, introImage: HTMLImageElement | null = null, introOpacity = 0) {
   const { width, height } = ctx.canvas;
   ctx.fillStyle = "#172b29";
   ctx.fillRect(0, 0, width, height);
   if (image) {
-    const placement = imagePlacement("naturalWidth" in image ? image.naturalWidth : image.width, "naturalHeight" in image ? image.naturalHeight : image.height, width, height, motion, progress);
+    const placement = imagePlacement("naturalWidth" in image ? image.naturalWidth : "videoWidth" in image ? image.videoWidth : image.width, "naturalHeight" in image ? image.naturalHeight : "videoHeight" in image ? image.videoHeight : image.height, width, height, motion, progress);
     ctx.drawImage(image, placement.x, placement.y, placement.width, placement.height);
   } else {
     const gradient = ctx.createLinearGradient(0, 0, width, height);
@@ -434,7 +448,7 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
           const blob = await getSceneVideo(project, scene, candidate);
           if (!blob) throw new Error(`${segment.title}의 동영상 파일을 찾지 못했습니다. 다시 업로드해 주세요.`);
           video = await openSceneVideo(blob);
-          const timestamps = Array.from({ length: frameCounts[segmentIndex] - introFrames }, (_, index) => video!.firstTimestamp + Math.min(index / VIDEO_FPS, video!.duration - 0.001));
+          const timestamps = Array.from({ length: frameCounts[segmentIndex] - introFrames }, (_, index) => video!.firstTimestamp + Math.min((segment.videoTrimStart ?? 0) + index / VIDEO_FPS, segment.videoTrimEnd ?? video!.duration, video!.duration - 0.001));
           videoFrames = video.sink.canvasesAtTimestamps(timestamps)[Symbol.asyncIterator]();
         }
       for (let localFrame = 0; localFrame < frameCounts[segmentIndex]; localFrame++) {

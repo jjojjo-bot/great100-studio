@@ -7,7 +7,7 @@ import { inspectSceneVideo, validateSceneVideoFile } from "./scene-video";
 import type { BackgroundMusic, GenerateRequest, ImageCandidate, ProjectData, Scene, SceneNarrationAudio, VisualAsset } from "./types";
 
 export const isTauri = () => "__TAURI_INTERNALS__" in window;
-const VIDEO_RENDER_VERSION = 7;
+const VIDEO_RENDER_VERSION = 8;
 
 const database = () => openDB("great100-studio", 4, {
   upgrade(db) {
