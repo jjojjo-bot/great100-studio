@@ -71,4 +71,10 @@
 .scene-video-preview { display: grid; gap: 12px; }
 .scene-video-preview video { width: min(100%, 640px); aspect-ratio: 16 / 9; background: #172b29; border-radius: 12px; }
 .video-candidate-badge { display: inline-block; margin: 7px 0; padding: 4px 9px; border-radius: 99px; background: #e7f2eb; color: #24513d; font-weight: 700; }
+.video-intro-panel { display: grid; gap: 12px; }
+.video-intro-panel > div:first-child { display: grid; gap: 5px; }
+.video-intro-panel small { color: var(--muted, #718078); line-height: 1.5; }
+.video-intro-choice { display: flex; align-items: center; gap: 14px; }
+.video-intro-choice select { min-width: 220px; max-width: 100%; padding: 10px 12px; border: 1px solid #d7dfd9; border-radius: 10px; background: white; }
+.video-intro-choice img { width: 120px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 8px; }
 @media (max-width: 650px) { .scene-video-upload { align-items: stretch; flex-direction: column; } }

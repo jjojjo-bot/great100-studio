@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createProjectDraft } from "./parser";
 import { SAMPLE_WORK_TEXT } from "./sample";
-import { activeTimedCaption, buildVideoPlan, captionParts, imagePlacement, musicGainAtTime, resolveImageMotion, sceneMusicVolume } from "./video";
+import { activeTimedCaption, buildVideoPlan, captionParts, imagePlacement, musicGainAtTime, resolveImageMotion, resolveVideoIntroImage, sceneMusicVolume } from "./video";
 
 describe("MP4 제작 계획", () => {
   it("requires a selected image for every scene", () => {
@@ -36,6 +36,25 @@ describe("MP4 제작 계획", () => {
     expect(plan[0]).toMatchObject({ opening: true, imageUrl: "poster-url" });
     expect(plan[0].videoCandidateId).toBeUndefined();
     expect(plan[1]).toMatchObject({ sceneId: project.scenes[0].id, imageUrl: "poster-url", videoCandidateId: "clip" });
+  });
+
+  it("이미지와 MP4를 함께 올리면 최근 업로드 이미지를 먼저 짧게 보여준다", () => {
+    const project = createProjectDraft(2, "이순신", "장군 · 지도자", SAMPLE_WORK_TEXT);
+    project.scenes = [project.scenes[0]];
+    const scene = project.scenes[0];
+    scene.duration = 8;
+    scene.candidates = [
+      { id: "first", path: "first.png", preview_url: "first-url", created_at: "now", mode: "uploaded" },
+      { id: "second", path: "second.png", preview_url: "second-url", created_at: "now", mode: "uploaded" },
+      { id: "clip", path: "clip.mp4", preview_url: "poster-url", created_at: "now", mode: "uploaded", media_type: "video", duration_sec: 5 },
+    ];
+    scene.selected_candidate_id = "clip";
+    expect(resolveVideoIntroImage(scene)?.id).toBe("second");
+    expect(buildVideoPlan(project)[1]).toMatchObject({ imageUrl: "second-url", videoCandidateId: "clip", videoIntroDuration: 1.5, duration: 8 });
+    scene.video_intro_candidate_id = "first";
+    expect(buildVideoPlan(project)[1].imageUrl).toBe("first-url");
+    scene.video_intro_candidate_id = null;
+    expect(buildVideoPlan(project)[1]).toMatchObject({ imageUrl: "poster-url", videoIntroDuration: undefined });
   });
 
   it("선택한 보조 이미지를 장면 후반부에, 썸네일을 마지막 이름 화면에 연결한다", () => {

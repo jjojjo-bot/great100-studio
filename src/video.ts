@@ -1,7 +1,7 @@
 import { getBackgroundMusic, getSceneNarration, getSceneVideo } from "./platform";
 import { openSceneVideo } from "./scene-video";
 import { reportForProject } from "./app-data";
-import type { CaptionBlock, ImageMotion, ProjectData } from "./types";
+import type { CaptionBlock, ImageCandidate, ImageMotion, ProjectData, Scene } from "./types";
 
 export const VIDEO_WIDTH = 1280;
 export const VIDEO_HEIGHT = 720;
@@ -16,6 +16,7 @@ export interface VideoSegment {
   emphasisSubtitle?: string;
   imageUrl?: string;
   videoCandidateId?: string;
+  videoIntroDuration?: number;
   supportImageUrl?: string;
   supportStartsAt?: number;
   duration: number;
@@ -37,6 +38,12 @@ export function sceneMusicVolume(volume: number | undefined): number {
   return volume === undefined ? 45 : Number.isFinite(volume) ? Math.max(0, Math.min(100, volume)) : 45;
 }
 
+export function resolveVideoIntroImage(scene: Scene): ImageCandidate | undefined {
+  if (scene.video_intro_candidate_id === null) return undefined;
+  if (scene.video_intro_candidate_id) return scene.candidates.find((candidate) => candidate.id === scene.video_intro_candidate_id && candidate.media_type !== "video");
+  return scene.candidates.filter((candidate) => candidate.mode === "uploaded" && candidate.media_type !== "video").at(-1);
+}
+
 export function buildVideoPlan(project: ProjectData): VideoSegment[] {
   if (!project.scenes.length) throw new Error("영상으로 만들 Scene이 없습니다.");
   if (project.schema_version === "2.1") {
@@ -45,15 +52,17 @@ export function buildVideoPlan(project: ProjectData): VideoSegment[] {
   }
   const scenes: VideoSegment[] = [...project.scenes].sort((a, b) => a.number - b.number).map((scene, index) => {
     const image = scene.candidates.find((candidate) => candidate.id === scene.selected_candidate_id);
-    if (!image) throw new Error(`Scene ${String(scene.number).padStart(2, "0")}의 이미지를 선택해 주세요.`);
+    if (!image) throw new Error(`Scene ${String(scene.number).padStart(2, "0")}의 이미지 또는 동영상을 선택해 주세요.`);
     const support = scene.support_candidates?.find((candidate) => candidate.id === scene.support_selected_candidate_id);
     if (scene.support_selected_candidate_id && !support) throw new Error(`Scene ${String(scene.number).padStart(2, "0")}의 선택한 보조 이미지를 찾지 못했습니다.`);
     const duration = scene.duration ?? 10;
     if (!Number.isFinite(duration) || duration < 1 || duration > 120) throw new Error(`Scene ${scene.number}의 길이는 1~120초여야 합니다.`);
+    const intro = image.media_type === "video" ? resolveVideoIntroImage(scene) : undefined;
     return { title: scene.title, sceneId: scene.id, caption: project.schema_version === "2.1" ? scene.narration || "" : scene.caption ?? scene.title,
       timedCaptions: project.schema_version === "2.1" ? scene.captions?.map((block) => ({ ...block, start_sec: block.start_sec - (scene.start_sec || 0), end_sec: block.end_sec - (scene.start_sec || 0) })) : undefined,
       emphasisSubtitle: project.schema_version === "2.1" ? scene.subtitle : undefined,
-      imageUrl: image.preview_url, videoCandidateId: image.media_type === "video" ? image.id : undefined,
+      imageUrl: intro?.preview_url || image.preview_url, videoCandidateId: image.media_type === "video" ? image.id : undefined,
+      videoIntroDuration: intro ? Math.min(1.5, duration / 4) : undefined,
       supportImageUrl: support?.preview_url, supportStartsAt: support ? duration / 2 : undefined,
       duration, motion: resolveImageMotion(scene.motion, index), musicVolume: sceneMusicVolume(scene.music_volume) };
   });
@@ -195,7 +204,7 @@ export function activeTimedCaption(blocks: CaptionBlock[], seconds: number): str
   return blocks.find((block) => seconds >= block.start_sec && seconds < block.end_sec)?.text || "";
 }
 
-function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | HTMLCanvasElement | OffscreenCanvas | null, caption: string, progress: number, person: string, motion: VideoSegment["motion"], emphasis = "", emphasisAge = 0, supportImage: HTMLImageElement | null = null, supportOpacity = 0, supportProgress = 0, openingOpacity = 0, ending = false, captionOpacity = 1) {
+function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | HTMLCanvasElement | OffscreenCanvas | null, caption: string, progress: number, person: string, motion: VideoSegment["motion"], emphasis = "", emphasisAge = 0, supportImage: HTMLImageElement | null = null, supportOpacity = 0, supportProgress = 0, openingOpacity = 0, ending = false, captionOpacity = 1, introImage: HTMLImageElement | null = null, introOpacity = 0) {
   const { width, height } = ctx.canvas;
   ctx.fillStyle = "#172b29";
   ctx.fillRect(0, 0, width, height);
@@ -208,6 +217,13 @@ function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | HTML
     gradient.addColorStop(1, "#a96943");
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, width, height);
+  }
+
+  if (introImage && introOpacity > 0) {
+    const placement = imagePlacement(introImage.naturalWidth, introImage.naturalHeight, width, height, motion, progress);
+    ctx.globalAlpha = introOpacity;
+    ctx.drawImage(introImage, placement.x, placement.y, placement.width, placement.height);
+    ctx.globalAlpha = 1;
   }
 
   if (supportImage && supportOpacity > 0) {
@@ -408,6 +424,8 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
       }
       let video: Awaited<ReturnType<typeof openSceneVideo>> | null = null;
       let videoFrames: AsyncIterator<{ canvas: HTMLCanvasElement | OffscreenCanvas } | null> | null = null;
+      const introFrames = segment.videoCandidateId && segment.videoIntroDuration
+        ? Math.min(frameCounts[segmentIndex] - 1, Math.max(1, Math.round(segment.videoIntroDuration * VIDEO_FPS))) : 0;
       try {
         if (segment.videoCandidateId) {
           const scene = project.scenes.find((item) => item.id === segment.sceneId);
@@ -416,7 +434,7 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
           const blob = await getSceneVideo(project, scene, candidate);
           if (!blob) throw new Error(`${segment.title}의 동영상 파일을 찾지 못했습니다. 다시 업로드해 주세요.`);
           video = await openSceneVideo(blob);
-          const timestamps = Array.from({ length: frameCounts[segmentIndex] }, (_, index) => video!.firstTimestamp + Math.min(index / VIDEO_FPS, video!.duration - 0.001));
+          const timestamps = Array.from({ length: frameCounts[segmentIndex] - introFrames }, (_, index) => video!.firstTimestamp + Math.min(index / VIDEO_FPS, video!.duration - 0.001));
           videoFrames = video.sink.canvasesAtTimestamps(timestamps)[Symbol.asyncIterator]();
         }
       for (let localFrame = 0; localFrame < frameCounts[segmentIndex]; localFrame++) {
@@ -430,9 +448,10 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
         const motionProgress = (segment.motionStart ?? 0) + progress * ((segment.motionEnd ?? 1) - (segment.motionStart ?? 0));
         const openingOpacity = segment.opening ? Math.min(1, (1 - progress) * segment.duration / 0.8) : 0;
         const captionOpacity = segmentIndex === 1 ? Math.min(1, seconds / 0.5) : 1;
-        const decoded = videoFrames ? await videoFrames.next() : null;
+        const decoded = videoFrames && localFrame >= introFrames ? await videoFrames.next() : null;
         const visual = decoded && !decoded.done && decoded.value ? decoded.value.canvas : image;
-        drawFrame(ctx, visual, part, motionProgress, project.person, segment.motion, segment.emphasisSubtitle && seconds < 3 ? segment.emphasisSubtitle : "", seconds, supportImage, supportOpacity, supportProgress, openingOpacity, !!segment.ending, captionOpacity);
+        const introOpacity = introFrames && localFrame >= introFrames ? Math.max(0, 1 - (localFrame - introFrames) / Math.max(1, Math.round(0.3 * VIDEO_FPS))) : 0;
+        drawFrame(ctx, visual, part, motionProgress, project.person, segment.motion, segment.emphasisSubtitle && seconds < 3 ? segment.emphasisSubtitle : "", seconds, supportImage, supportOpacity, supportProgress, openingOpacity, !!segment.ending, captionOpacity, introOpacity ? image : null, introOpacity);
         await source.add(frame / VIDEO_FPS, 1 / VIDEO_FPS);
         frame++;
         if (frame % 7 === 0 || frame === totalFrames) await feedAudioUntil(Math.min(totalFrames / VIDEO_FPS, frame / VIDEO_FPS + 0.5));

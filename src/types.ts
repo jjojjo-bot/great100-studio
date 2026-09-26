@@ -38,6 +38,7 @@ export interface Scene {
   prompt_history: PromptRevision[];
   candidates: ImageCandidate[];
   selected_candidate_id?: string;
+  video_intro_candidate_id?: string | null;
   status: CandidateStatus;
   source_scene_id?: string;
   start_sec?: number;
