@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { LoaderCircle, Mic, Square, Trash2, Upload } from "lucide-react";
 import { getSceneNarration, removeSceneNarration, saveSceneNarration } from "./platform";
 import type { ProjectData, Scene } from "./types";
-import { CaptionWaveform } from "./CaptionWaveform";
 
 export function SceneNarrationPanel({ project, scene, onChange }: { project: ProjectData; scene: Scene; onChange: (scene: Scene) => void }) {
   const input = useRef<HTMLInputElement>(null);
@@ -14,8 +13,6 @@ export function SceneNarrationPanel({ project, scene, onChange }: { project: Pro
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
-  const [previewBlob, setPreviewBlob] = useState<Blob | null>(null);
-  const [playhead, setPlayhead] = useState(0);
   const [revision, setRevision] = useState(0);
   const duration = scene.duration ?? 10;
 
@@ -26,10 +23,10 @@ export function SceneNarrationPanel({ project, scene, onChange }: { project: Pro
       getSceneNarration(project, scene).then((blob) => {
         if (!blob) throw new Error("저장된 녹음을 찾지 못했습니다. 다시 녹음하거나 업로드해 주세요.");
         url = URL.createObjectURL(blob);
-        if (active) { setPreviewUrl(url); setPreviewBlob(blob); }
+        if (active) setPreviewUrl(url);
         else URL.revokeObjectURL(url);
       }).catch((cause) => { if (active) setError(String(cause)); });
-    } else { setPreviewUrl(""); setPreviewBlob(null); }
+    } else setPreviewUrl("");
     return () => { active = false; if (url) URL.revokeObjectURL(url); };
   }, [project.id, scene.id, scene.narration_audio?.path, revision]);
 
@@ -111,8 +108,7 @@ export function SceneNarrationPanel({ project, scene, onChange }: { project: Pro
       {recording ? <button className="btn primary" onClick={() => recorder.current?.stop()}><Square size={15} /> 녹음 마치기 · {elapsed.toFixed(1)}초</button> : <button className="btn primary" disabled={busy} onClick={() => void startRecording()}><Mic size={16} /> {scene.narration_audio ? "다시 녹음" : "녹음 시작"}</button>}
       <button className="btn ghost" disabled={busy || recording} onClick={() => input.current?.click()}>{busy ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />} 파일 업로드</button>
     </div>
-    {scene.narration_audio && <div className="narration-file"><span>{scene.narration_audio.name} · {scene.narration_audio.duration_sec.toFixed(1)}초</span>{previewUrl && <audio controls preload="metadata" src={previewUrl} onTimeUpdate={(event) => setPlayhead(event.currentTarget.currentTime)} aria-label={`Scene ${scene.number} 내레이션 미리듣기`} />}<button className="btn ghost" disabled={busy || recording} onClick={() => void remove()}><Trash2 size={15} /> 제거</button></div>}
-    {scene.narration_audio && project.schema_version === "2.1" && <CaptionWaveform blob={previewBlob} scene={scene} originalCaptions={project.source?.scenes.find((item) => item.id === (scene.source_scene_id || scene.id))?.captions} onChange={onChange} playhead={playhead} />}
+    {scene.narration_audio && <div className="narration-file"><span>{scene.narration_audio.name} · {scene.narration_audio.duration_sec.toFixed(1)}초</span>{previewUrl && <audio controls preload="metadata" src={previewUrl} aria-label={`Scene ${scene.number} 내레이션 미리듣기`} />}<button className="btn ghost" disabled={busy || recording} onClick={() => void remove()}><Trash2 size={15} /> 제거</button></div>}
     <small className="narration-hint">MP3·WAV·M4A·MP4·WebM, 30MB 이하. 장면보다 짧은 녹음은 나머지 시간에 음악만 재생되고, 긴 녹음은 저장 전에 안내합니다. 목소리가 나올 때 배경음악은 자동으로 작아집니다.</small>
     {error && <div className="error-banner">{error}</div>}
   </div>;

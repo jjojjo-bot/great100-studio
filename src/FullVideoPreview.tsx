@@ -13,7 +13,7 @@ const loadImage = async (url?: string) => {
   return image;
 };
 
-export function FullVideoPreview({ project, sceneId }: { project: ProjectData; sceneId?: string }) {
+export function FullVideoPreview({ project, sceneId, seekRequest, onPositionChange }: { project: ProjectData; sceneId?: string; seekRequest?: { id: number; time: number }; onPositionChange?: (time: number) => void }) {
   const planResult = useMemo(() => { try {
     const scene = sceneId ? project.scenes.find((item) => item.id === sceneId) : undefined;
     if (sceneId && !scene) throw new Error("장면을 찾지 못했습니다.");
@@ -37,6 +37,13 @@ export function FullVideoPreview({ project, sceneId }: { project: ProjectData; s
   const [ready, setReady] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [error, setError] = useState("");
+  const reportedPositionRef = useRef(-1);
+  const reportPosition = (time: number, force = false) => {
+    if (onPositionChange && (force || Math.abs(time - reportedPositionRef.current) >= 0.1)) {
+      reportedPositionRef.current = time;
+      onPositionChange(time);
+    }
+  };
 
   const renderAt = (time: number) => {
     const ctx = canvasRef.current?.getContext("2d");
@@ -86,7 +93,7 @@ export function FullVideoPreview({ project, sceneId }: { project: ProjectData; s
     let cancelled = false;
     const urls: string[] = [];
     playingRef.current = false; setPlaying(false); cancelAnimationFrame(rafRef.current);
-    setReady(false); setError(""); setPosition(0); positionRef.current = 0;
+    setReady(false); setError(""); setPosition(0); positionRef.current = 0; reportPosition(0, true);
     const load = async () => {
       const media: Media[] = [];
       for (const segment of plan) {
@@ -140,6 +147,7 @@ export function FullVideoPreview({ project, sceneId }: { project: ProjectData; s
     positionRef.current = clamp(time, 0, total);
     if (playingRef.current) playbackStartRef.current = performance.now() - positionRef.current * 1000;
     setPosition(positionRef.current);
+    reportPosition(positionRef.current, true);
     if (musicRef.current) musicRef.current.currentTime = positionRef.current % (musicRef.current.duration || 1);
     renderRef.current(positionRef.current);
   };
@@ -151,11 +159,13 @@ export function FullVideoPreview({ project, sceneId }: { project: ProjectData; s
     const tick = () => {
       const next = Math.min(total, (performance.now() - playbackStartRef.current) / 1000);
       positionRef.current = next; setPosition(next); renderRef.current(next);
+      reportPosition(next, next === total);
       if (next < total && playingRef.current) rafRef.current = requestAnimationFrame(tick);
       else { playingRef.current = false; setPlaying(false); musicRef.current?.pause(); mediaRef.current.forEach((item) => { item.narration?.pause(); item.video?.pause(); }); }
     };
     rafRef.current = requestAnimationFrame(tick);
   };
+  useEffect(() => { if (seekRequest && ready) seek(seekRequest.time); }, [seekRequest?.id, ready]);
   const title = sceneId ? "이 장면의 자막·영상 미리보기" : "MP4 만들기 전 전체 미리보기";
   if (planResult.error) return <div className="panel"><strong>{title}</strong><p>{sceneId ? "이 장면의 이미지 또는 동영상을 선택하면 재생할 수 있습니다." : "장면과 썸네일을 모두 선택하면 재생할 수 있습니다."} {planResult.error}</p></div>;
   return <div className="panel full-video-preview"><div><strong>{title}</strong><small>{sceneId ? "이 장면의 자막·화면·녹음을 함께 확인하세요. 자막 시간을 바꾸면 이 화면에 바로 반영됩니다." : "장면 전환·자막·배경음악·녹음을 재생하며 확인하세요."}</small></div><canvas ref={canvasRef} width={VIDEO_WIDTH} height={VIDEO_HEIGHT} aria-label={sceneId ? "장면 자막 영상 미리보기 화면" : "전체 영상 미리보기 화면"} />

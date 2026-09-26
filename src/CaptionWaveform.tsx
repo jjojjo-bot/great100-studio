@@ -46,7 +46,7 @@ export function resetCaptionTiming(blocks: CaptionBlock[], original?: CaptionBlo
   return blocks.map((block, index) => ({ ...block, start_sec: original[index].start_sec, end_sec: original[index].end_sec }));
 }
 
-export function CaptionWaveform({ blob, scene, originalCaptions, onChange, playhead = 0 }: { blob?: Blob | null; scene: Scene; originalCaptions?: CaptionBlock[]; onChange: (scene: Scene) => void; playhead?: number }) {
+export function CaptionWaveform({ blob, scene, originalCaptions, onChange, playhead = 0, embedded = false, onSelectCaption }: { blob?: Blob | null; scene: Scene; originalCaptions?: CaptionBlock[]; onChange: (scene: Scene) => void; playhead?: number; embedded?: boolean; onSelectCaption?: (time: number) => void }) {
   const [bars, setBars] = useState<number[]>([]);
   const [draft, setDraft] = useState<CaptionBlock[] | null>(null);
   const draftRef = useRef<CaptionBlock[] | null>(null);
@@ -99,14 +99,17 @@ export function CaptionWaveform({ blob, scene, originalCaptions, onChange, playh
   const begin = (event: React.PointerEvent, index: number, mode: Drag["mode"]) => {
     event.preventDefault(); event.stopPropagation();
     if (!Number.isFinite(event.clientX)) return;
+    if (mode === "move") onSelectCaption?.(Math.max(0, blocks[index].start_sec - start));
     drag.current = { index, mode, x: event.clientX, initial: [...blocks] };
     track.current?.setPointerCapture(event.pointerId);
   };
-  return <div className="caption-waveform"><div className="caption-waveform-head"><strong>{blob ? "녹음 파형과 자막 시간" : "자막 시간 막대"}</strong><button className="btn ghost" type="button" disabled={!canReset} onClick={() => { drag.current = null; draftRef.current = null; setDraft(null); onChange({ ...scene, captions: resetCaptionTiming(scene.captions || [], originalCaptions) }); }}>제작안 시간으로 초기화</button></div><small>양끝 손잡이로 한 자막의 노출 시간을 바꾸면 나머지 자막이 남은 시간을 비율대로 나눠 갖습니다. 가운데를 끌면 해당 자막 위치만 옮깁니다.</small>
+  const trackContent = <>
     <div className="waveform-track" ref={track} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={() => { drag.current = null; setDraft(null); }}>
       <div className="waveform-bars">{bars.map((height, index) => <i key={index} style={{ height: `${Math.round(height * 100)}%` }} />)}</div>
       {blocks.map((block, index) => <div key={index} className="waveform-caption" style={{ left: `${(block.start_sec - start) / duration * 100}%`, width: `${(block.end_sec - block.start_sec) / duration * 100}%` }} title={`${index + 1}. ${block.text} · ${block.start_sec.toFixed(1)}–${block.end_sec.toFixed(1)}초`} onPointerDown={(event) => begin(event, index, "move")}><span className="waveform-handle" role="slider" aria-label={`자막 ${index + 1} 시작 손잡이`} aria-valuemin={start} aria-valuemax={block.end_sec - 0.1} aria-valuenow={block.start_sec} onPointerDown={(event) => begin(event, index, "start")} /><b>{index + 1}</b><span className="waveform-handle" role="slider" aria-label={`자막 ${index + 1} 종료 손잡이`} aria-valuemin={block.start_sec + 0.1} aria-valuemax={start + duration} aria-valuenow={block.end_sec} onPointerDown={(event) => begin(event, index, "end")} /></div>)}
       <div className="waveform-playhead" style={{ left: `${clamp(playhead / duration, 0, 1) * 100}%` }} />
-    </div><div className="waveform-ruler"><span>{start.toFixed(1)}초</span><span>{(start + duration).toFixed(1)}초</span></div>{error && <small>{error}</small>}{!blocks.length && <small>이 장면에는 시간 지정 자막이 없습니다.</small>}
-  </div>;
+    </div>{error && <small>{error}</small>}{!blocks.length && <small>이 장면에는 시간 지정 자막이 없습니다.</small>}
+  </>;
+  if (embedded) return <div className="caption-waveform embedded">{trackContent}</div>;
+  return <div className="caption-waveform"><div className="caption-waveform-head"><strong>{blob ? "녹음 파형과 자막 시간" : "자막 시간 막대"}</strong><button className="btn ghost" type="button" disabled={!canReset} onClick={() => { drag.current = null; draftRef.current = null; setDraft(null); onChange({ ...scene, captions: resetCaptionTiming(scene.captions || [], originalCaptions) }); }}>제작안 시간으로 초기화</button></div><small>양끝 손잡이로 한 자막의 노출 시간을 바꾸면 나머지 자막이 남은 시간을 비율대로 나눠 갖습니다. 가운데를 끌면 해당 자막 위치만 옮깁니다.</small>{trackContent}<div className="waveform-ruler"><span>{start.toFixed(1)}초</span><span>{(start + duration).toFixed(1)}초</span></div></div>;
 }

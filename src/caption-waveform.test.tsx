@@ -62,4 +62,16 @@ describe("자막 시간 막대", () => {
       { text: "둘째", start_sec: 3, end_sec: 10 },
     ] }));
   });
+
+  it("통합 시간축에서 자막을 누르면 해당 자막의 시작 위치를 알린다", () => {
+    const scene = createProjectDraft(1, "세종대왕", "왕", SAMPLE_WORK_TEXT).scenes[0];
+    scene.start_sec = 20; scene.duration = 10;
+    scene.captions = [{ text: "첫 자막", start_sec: 20, end_sec: 23 }, { text: "두 번째", start_sec: 23, end_sec: 30 }];
+    const onSelectCaption = vi.fn();
+    const { container } = render(<CaptionWaveform embedded scene={scene} onChange={vi.fn()} onSelectCaption={onSelectCaption} />);
+    const track = container.querySelector(".waveform-track") as HTMLDivElement;
+    track.setPointerCapture = vi.fn();
+    fireEvent((container.querySelectorAll(".waveform-caption")[1]), new MouseEvent("pointerdown", { bubbles: true, clientX: 100 }));
+    expect(onSelectCaption).toHaveBeenCalledWith(3);
+  });
 });
