@@ -3,16 +3,18 @@ import { openDB } from "idb";
 import JSZip from "jszip";
 import { MAX_MUSIC_BYTES, MAX_MUSIC_SECONDS } from "./music-limits";
 import { composeScenePrompt, composeThumbnailPrompt, withFullImagePrompts } from "./prompts";
+import { inspectSceneVideo, validateSceneVideoFile } from "./scene-video";
 import type { BackgroundMusic, GenerateRequest, ImageCandidate, ProjectData, Scene, SceneNarrationAudio, VisualAsset } from "./types";
 
 export const isTauri = () => "__TAURI_INTERNALS__" in window;
-const VIDEO_RENDER_VERSION = 5;
+const VIDEO_RENDER_VERSION = 6;
 
-const database = () => openDB("great100-studio", 3, {
+const database = () => openDB("great100-studio", 4, {
   upgrade(db) {
     if (!db.objectStoreNames.contains("projects")) db.createObjectStore("projects", { keyPath: "id" });
     if (!db.objectStoreNames.contains("videos")) db.createObjectStore("videos", { keyPath: "id" });
     if (!db.objectStoreNames.contains("audio")) db.createObjectStore("audio", { keyPath: "id" });
+    if (!db.objectStoreNames.contains("media")) db.createObjectStore("media", { keyPath: "id" });
   },
 });
 
@@ -60,10 +62,12 @@ export async function deleteProject(project: ProjectData): Promise<string | unde
   if (!saved || saved.project_path !== project.project_path || saved.folder_name !== project.folder_name) {
     throw new Error("삭제할 프로젝트가 저장된 내용과 일치하지 않습니다. 목록을 새로고침해 주세요.");
   }
-  const tx = db.transaction(["projects", "videos", "audio"], "readwrite");
+  const tx = db.transaction(["projects", "videos", "audio", "media"], "readwrite");
   const audio = tx.objectStore("audio");
+  const media = tx.objectStore("media");
   const narrationKeys = (await audio.getAllKeys()).filter((key) => typeof key === "string" && key.startsWith(`${project.id}:narration:`));
-  await Promise.all([tx.objectStore("projects").delete(project.id), tx.objectStore("videos").delete(project.id), audio.delete(project.id), ...narrationKeys.map((key) => audio.delete(key))]);
+  const mediaKeys = (await media.getAllKeys()).filter((key) => typeof key === "string" && key.startsWith(`${project.id}:scene-video:`));
+  await Promise.all([tx.objectStore("projects").delete(project.id), tx.objectStore("videos").delete(project.id), audio.delete(project.id), ...narrationKeys.map((key) => audio.delete(key)), ...mediaKeys.map((key) => media.delete(key))]);
   await tx.done;
 }
 
@@ -270,6 +274,41 @@ export async function importImageCandidates(files: File[], location: ImageLocati
   return candidates;
 }
 
+const sceneVideoKey = (project: ProjectData, candidateId: string) => `${project.id}:scene-video:${candidateId}`;
+
+export async function importSceneVideo(project: ProjectData, scene: Scene, file: File): Promise<ImageCandidate> {
+  validateSceneVideoFile(file, new Uint8Array(await file.slice(0, 12).arrayBuffer()));
+  const { duration, poster } = await inspectSceneVideo(file);
+  let id: string = crypto.randomUUID();
+  let path = `${project.project_path}/03_images/scene${String(scene.number).padStart(2, "0")}/candidate_${id}.mp4`;
+  if (isTauri()) {
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(new Error("동영상 파일을 읽지 못했습니다."));
+      reader.readAsDataURL(file);
+    });
+    const saved = await invoke<{ id: string; path: string }>("import_scene_video", { projectPath: project.project_path, sceneNumber: scene.number, dataUrl: `data:video/mp4;base64,${dataUrl.slice(dataUrl.indexOf(",") + 1)}` });
+    id = saved.id;
+    path = saved.path;
+  } else {
+    const db = await database();
+    await db.put("media", { id: sceneVideoKey(project, id), blob: file });
+  }
+  return { id, path, preview_url: poster, created_at: new Date().toISOString(), mode: "uploaded", media_type: "video", duration_sec: duration };
+}
+
+export async function getSceneVideo(project: ProjectData, scene: Scene, candidate: ImageCandidate): Promise<Blob | null> {
+  if (candidate.media_type !== "video") return null;
+  if (isTauri()) {
+    const encoded = await invoke<string>("read_scene_video", { projectPath: project.project_path, sceneNumber: scene.number, candidateId: candidate.id });
+    return await (await fetch(`data:video/mp4;base64,${encoded}`)).blob();
+  }
+  const db = await database();
+  const saved = await db.get("media", sceneVideoKey(project, candidate.id)) as { blob: Blob } | undefined;
+  return saved?.blob || null;
+}
+
 function candidatePath(request: ImageLocation, id: string, extension: string) {
   const folder = request.asset_kind === "scene" || request.asset_kind === "support" ? `03_images/scene${String(request.scene_number).padStart(2, "0")}` : request.asset_kind === "anchor" ? "02_character" : "04_thumbnail";
   const prefix = request.asset_kind === "support" ? "support_" : "candidate_";
@@ -346,7 +385,8 @@ export async function buildProjectZip(project: ProjectData, video?: Blob): Promi
   root.file("06_logs/prompt_history.jsonl", promptHistory.join("\n") + (promptHistory.length ? "\n" : ""));
   for (const [assetIndex, asset] of [project.anchor, project.thumbnail, ...project.scenes, ...project.scenes.map((scene) => ({ candidates: scene.support_candidates || [], selected_candidate_id: scene.support_selected_candidate_id }))].entries()) {
     for (const candidate of asset.candidates) {
-      const blob = await (await fetch(candidate.preview_url)).blob();
+      const blob = candidate.media_type === "video" ? await getSceneVideo(project, project.scenes[assetIndex - 2], candidate) : await (await fetch(candidate.preview_url)).blob();
+      if (!blob) throw new Error(`Scene ${project.scenes[assetIndex - 2]?.number} 동영상 파일을 찾지 못했습니다.`);
       const path = candidate.path.replace(`${project.project_path}/`, "");
       root.file(path, blob);
       if (candidate.id === asset.selected_candidate_id) {

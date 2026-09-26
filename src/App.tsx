@@ -26,7 +26,7 @@ import {
 import { createProjectDraft, DEFAULT_STYLE, parseWorkText } from "./parser";
 import { completionErrors, createV2ProjectDraft, parseAppData, reportForProject } from "./app-data";
 import { composeScenePrompt, composeThumbnailPrompt } from "./prompts";
-import { createProjectOnDisk, deleteProject, downloadBlob, exportProjectZip, generateImages, getAccessCode, getBackgroundMusic, getRenderedVideo, importImageCandidates, isTauri, listProjects, removeBackgroundMusic, removeSceneNarration, saveBackgroundMusic, saveProject, saveRenderedVideo, setAccessCode } from "./platform";
+import { createProjectOnDisk, deleteProject, downloadBlob, exportProjectZip, generateImages, getAccessCode, getBackgroundMusic, getRenderedVideo, getSceneVideo, importImageCandidates, importSceneVideo, isTauri, listProjects, removeBackgroundMusic, removeSceneNarration, saveBackgroundMusic, saveProject, saveRenderedVideo, setAccessCode } from "./platform";
 import { buildVideoPlan, renderProjectMp4, sceneMusicVolume } from "./video";
 import { SceneNarrationPanel } from "./SceneNarrationPanel";
 import { SAMPLE_WORK_TEXT } from "./sample";
@@ -195,7 +195,7 @@ function Dashboard({ onStart, projects, accessCode, onAccessCode, onOpen, onDown
     <div className="hero-copy">
       <div className="eyebrow">GREAT STORIES, BEAUTIFULLY MADE</div>
       <h1>한 사람의 이야기를<br /><em>한 편의 그림책처럼.</em></h1>
-      <p>Work 제작안을 붙여넣으면 장면 이미지와 자막을 준비하고<br />직접 녹음한 내레이션과 배경음악을 더한 MP4까지 만들 수 있어요.</p>
+      <p>Work 제작안을 붙여넣으면 장면 이미지·동영상과 자막을 준비하고<br />직접 녹음한 내레이션과 배경음악을 더한 MP4까지 만들 수 있어요.</p>
       <button className="btn primary large" onClick={onStart}><Plus size={19} /> 새 인물 프로젝트</button>
     </div>
     <div className="hero-art" aria-label="Great100 Studio illustration">
@@ -293,8 +293,8 @@ function Preflight({ project }: { project: ProjectData }) {
 
 function ImageReview({ project }: { project: ProjectData }) {
   const errors = completionErrors(project);
-  return <div className="page"><PageHeading eyebrow="FINAL IMAGE REVIEW" title="전체 이미지를 한 번 더 확인하세요" text="Scene 순서와 핵심 업적 장면, 썸네일을 검토한 뒤 MP4를 만듭니다." />
-    <div className="review-image-grid">{project.scenes.map((scene) => { const image = scene.candidates.find((candidate) => candidate.id === scene.selected_candidate_id); const support = scene.support_candidates?.find((candidate) => candidate.id === scene.support_selected_candidate_id); return <div className="panel review-image-card" key={scene.id}>{image ? <img src={image.preview_url} alt={`${scene.title} 선택 이미지`} /> : <div className="candidate-empty">이미지 미선택</div>}<strong>{scene.source_scene_id || `Scene ${scene.number}`} · {scene.title}</strong>{support && <div className="review-support"><img src={support.preview_url} alt={`${scene.title} 보조 이미지`} /><small>후반부 보조 이미지</small></div>}{project.source?.core_achievement.scene_id === scene.source_scene_id && <em>★ 핵심 업적</em>}</div>; })}</div>
+  return <div className="page"><PageHeading eyebrow="FINAL IMAGE REVIEW" title="전체 장면을 한 번 더 확인하세요" text="Scene 순서와 핵심 업적 장면, 썸네일을 검토한 뒤 MP4를 만듭니다." />
+    <div className="review-image-grid">{project.scenes.map((scene) => { const image = scene.candidates.find((candidate) => candidate.id === scene.selected_candidate_id); const support = scene.support_candidates?.find((candidate) => candidate.id === scene.support_selected_candidate_id); return <div className="panel review-image-card" key={scene.id}>{image ? <><img src={image.preview_url} alt={`${scene.title} 선택 ${image.media_type === "video" ? "동영상" : "이미지"}`} />{image.media_type === "video" && <small className="video-candidate-badge">동영상 · {image.duration_sec?.toFixed(1)}초</small>}</> : <div className="candidate-empty">장면 미선택</div>}<strong>{scene.source_scene_id || `Scene ${scene.number}`} · {scene.title}</strong>{support && <div className="review-support"><img src={support.preview_url} alt={`${scene.title} 보조 이미지`} /><small>후반부 보조 이미지</small></div>}{project.source?.core_achievement.scene_id === scene.source_scene_id && <em>★ 핵심 업적</em>}</div>; })}</div>
     <div className="panel"><h3>썸네일</h3>{project.thumbnail.candidates.find((candidate) => candidate.id === project.thumbnail.selected_candidate_id) ? <img className="review-thumbnail" src={project.thumbnail.candidates.find((candidate) => candidate.id === project.thumbnail.selected_candidate_id)!.preview_url} alt="선택 썸네일" /> : <p>선택된 썸네일이 없습니다.</p>}</div>
     {errors.length > 0 && <div className="error-banner"><strong>완료 전 확인할 항목</strong><ul>{errors.map((error, index) => <li key={index}>{error}</li>)}</ul></div>}
   </div>;
@@ -388,6 +388,8 @@ function SceneStudio({ project, onChange, onProjectChange }: { project: ProjectD
   const [uploading, setUploading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [supportBusy, setSupportBusy] = useState(false);
+  const [videoBusy, setVideoBusy] = useState(false);
+  const videoInput = useRef<HTMLInputElement>(null);
   const scene = project.scenes.find((item) => item.id === active) || project.scenes[0];
   if (!scene) return <div className="empty-state"><Circle size={28} /><h3>분석된 장면이 없습니다</h3><p>파싱 확인 단계로 돌아가 Scene 항목을 확인해 주세요.</p></div>;
   const fullPrompt = composeScenePrompt(project, scene);
@@ -414,6 +416,14 @@ function SceneStudio({ project, onChange, onProjectChange }: { project: ProjectD
     } catch (cause) { setError(String(cause)); }
     finally { setUploading(false); }
   };
+  const uploadVideo = async (file: File) => {
+    setVideoBusy(true); setError("");
+    try {
+      const candidate = await importSceneVideo(project, scene, file);
+      onChange({ ...scene, candidates: [...scene.candidates, candidate], selected_candidate_id: candidate.id, status: "ready" });
+    } catch (cause) { setError(String(cause)); }
+    finally { setVideoBusy(false); }
+  };
   const generateSupport = async () => {
     if (!scene.support_image_prompt?.trim()) return;
     setSupportBusy(true); setError("");
@@ -434,19 +444,21 @@ function SceneStudio({ project, onChange, onProjectChange }: { project: ProjectD
   const position = project.scenes.findIndex((item) => item.id === scene.id);
   const neighbors = [project.scenes[position - 1], project.scenes[position + 1]].filter((item): item is Scene => !!item);
   return <div className="page scene-page">
-    <PageHeading eyebrow="SCENE REVIEW" title="장면을 만들고 고르세요" text="프롬프트를 다듬고 각 장면의 최종 이미지를 하나씩 선택합니다." />
+    <PageHeading eyebrow="SCENE REVIEW" title="장면을 만들고 고르세요" text="프롬프트를 다듬고 각 장면의 최종 이미지 또는 짧은 동영상을 선택합니다." />
     <BackgroundMusicPanel project={project} onChange={onProjectChange} />
     <div className="scene-tabs">{project.scenes.map((item) => <button key={item.id} className={item.id === scene.id ? "active" : ""} onClick={() => { setActive(item.id); setCopied(false); }}><span>{item.selected_candidate_id ? <Check size={13} /> : item.number}</span>{item.title}{item.narration_audio && <Mic size={12} aria-label="녹음 있음" />}</button>)}</div>
     <div className="scene-title"><div><span>SCENE {String(scene.number).padStart(2, "0")}</span><h3>{scene.title}</h3></div></div>
     {project.schema_version !== 1 && <div className="panel scene-context"><div className="scene-context-head"><span>{scene.start_sec}–{scene.end_sec}초</span>{project.source?.core_achievement.scene_id === scene.source_scene_id && <em>★ 핵심 업적 · {project.source?.core_achievement.title}</em>}</div><p><b>내레이션</b> {scene.narration}</p><p><b>장면 설명</b> {scene.scene_description}</p><p><b>화면 구성</b> {scene.visual_type} · {scene.shot_type} · {scene.location}</p><p><b>대상과 행동</b> {scene.main_subject} · {scene.main_action}</p>{scene.overlay_required && <p><b>역사 자료 오버레이</b> {scene.overlay_type} · {scene.overlay_note}</p>}</div>}
     {project.schema_version !== 1 && <div className="panel neighbor-panel"><strong>인접 장면 비교</strong><div className="neighbor-grid">{neighbors.map((item) => { const image = item.candidates.find((candidate) => candidate.id === item.selected_candidate_id); return <div key={item.id}>{image ? <img src={image.preview_url} alt={`${item.title} 선택 이미지`} /> : <div className="neighbor-empty">아직 이미지 없음</div>}<small>{item.source_scene_id} · {item.title}</small></div>; })}</div></div>}
     <PromptEditor heading="장면 내용 (수정 가능)" value={scene.prompt} historyCount={scene.prompt_history.length} onChange={(prompt) => { setCopied(false); onChange({ ...scene, prompt }); }} onGenerate={generate} onUpload={upload} generating={scene.status === "generating"} uploading={uploading} generateCount={project.schema_version !== 1 ? 2 : 3} />
+    <div className="panel scene-video-upload"><div><strong>이미지 대신 짧은 동영상</strong><small>MP4 · 최대 10초 · 50MB 이하. 장면보다 짧으면 마지막 화면을 유지하고, 길면 장면 끝에서 자릅니다. 원본 소리는 사용하지 않습니다.</small></div><input ref={videoInput} className="file-input" type="file" accept=".mp4,video/mp4" aria-label="장면 MP4 파일 선택" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void uploadVideo(file); }} /><button className="btn ghost" disabled={videoBusy || uploading} onClick={() => videoInput.current?.click()}>{videoBusy ? <LoaderCircle className="spin" size={17} /> : <Upload size={17} />}{videoBusy ? "동영상 처리 중…" : "MP4 업로드"}</button></div>
     <div className="panel full-prompt-panel"><div className="full-prompt-head"><div><strong>복사용 전체 이미지 프롬프트</strong><small>장면 내용 + 인물 외형 기준 + 공통 스타일이 항상 함께 들어갑니다.</small></div><button className="btn ghost" disabled={!scene.prompt.trim()} onClick={copyFullPrompt}>{copied ? <Check size={16} /> : <Copy size={16} />}{copied ? "복사됨" : "전체 프롬프트 복사"}</button></div><textarea aria-label="복사용 전체 이미지 프롬프트" readOnly value={fullPrompt} /></div>
     {project.schema_version === "2.1" ? <V21CaptionEditor scene={scene} onChange={onChange} /> : <div className="panel caption-panel"><label><strong>영상 자막</strong><small>이 문장이 장면 이미지 위에 표시됩니다.</small><textarea aria-label="영상 자막" value={scene.caption ?? scene.title} onChange={(event) => onChange({ ...scene, caption: event.target.value })} /></label><label className="duration-label"><strong>표시 시간 (초)</strong><input aria-label="장면 표시 시간" type="number" min="1" max="120" step="1" disabled={project.schema_version === "2.0"} title={project.schema_version === "2.0" ? "v2 시간은 APP_DATA의 시작·종료 시간을 따릅니다." : undefined} value={scene.duration ?? 10} onChange={(event) => onChange({ ...scene, duration: Number(event.target.value) })} /></label><label className="motion-label"><strong>이미지 효과</strong><small>MP4에 적용됩니다.</small><select aria-label="이미지 효과" value={scene.motion ?? "auto"} onChange={(event) => onChange({ ...scene, motion: event.target.value as ImageMotion })}><option value="auto">자동 (장면마다 다르게)</option><option value="zoom-in">천천히 줌인</option><option value="zoom-out">천천히 줌아웃</option><option value="pan-left">왼쪽으로 이동</option><option value="pan-right">오른쪽으로 이동</option><option value="pan-up">위로 이동</option><option value="pan-down">아래로 이동</option><option value="none">효과 없음</option></select></label></div>}
     <SceneNarrationPanel key={scene.id} project={project} scene={scene} onChange={onChange} />
     <div className="panel music-volume-panel"><label><strong>이 장면의 배경음악 볼륨</strong><small>{project.background_music ? "장면이 바뀔 때 볼륨도 부드럽게 바뀝니다." : "음악을 추가하면 이 설정이 적용됩니다."}</small><input aria-label="장면 배경음악 볼륨" type="range" min="0" max="100" step="1" value={sceneMusicVolume(scene.music_volume)} onChange={(event) => onChange({ ...scene, music_volume: Number(event.target.value) })} /></label><output>{sceneMusicVolume(scene.music_volume)}%</output></div>
     {error && <div className="error-banner">{error}</div>}
-    <CandidateGrid candidates={scene.candidates} selected={scene.selected_candidate_id} onSelect={(id) => onChange({ ...scene, selected_candidate_id: id })} emptyLabel="이 장면의 이미지를 업로드하거나 생성해 보세요" />
+    <CandidateGrid candidates={scene.candidates} selected={scene.selected_candidate_id} onSelect={(id) => onChange({ ...scene, selected_candidate_id: id })} emptyLabel="이 장면의 이미지나 동영상을 업로드해 보세요" />
+    {scene.candidates.find((candidate) => candidate.id === scene.selected_candidate_id)?.media_type === "video" && <SceneVideoPreview project={project} scene={scene} candidate={scene.candidates.find((candidate) => candidate.id === scene.selected_candidate_id)!} />}
     {project.schema_version !== 1 && scene.support_image_prompt && <><div className="panel support-panel"><h3>보조 이미지 · 별도 생성</h3><p className="support-hint">선택한 보조 이미지는 이 장면의 후반부에 부드럽게 전환되어 MP4에 들어갑니다.</p><textarea aria-label="보조 이미지 프롬프트" value={scene.support_image_prompt} onChange={(event) => onChange({ ...scene, support_image_prompt: event.target.value })} /><div className="prompt-actions"><label className="btn ghost support-upload">보조 이미지 업로드<input type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => { const files = Array.from(event.target.files || []); event.target.value = ""; if (files.length) void uploadSupport(files); }} /></label><button className="btn primary" disabled={supportBusy} onClick={generateSupport}>{supportBusy ? "처리 중…" : "보조 후보 2장 생성"}</button></div></div><CandidateGrid candidates={scene.support_candidates || []} selected={scene.support_selected_candidate_id} onSelect={(id) => onChange({ ...scene, support_selected_candidate_id: id })} emptyLabel="보조 이미지는 선택 사항입니다" /></>}
   </div>;
 }
@@ -467,7 +479,23 @@ function PromptEditor({ heading = "이미지 프롬프트", value, historyCount,
 
 function CandidateGrid({ candidates, selected, onSelect, emptyLabel }: { candidates: ImageCandidate[]; selected?: string; onSelect: (id: string) => void; emptyLabel: string }) {
   if (!candidates.length) return <div className="candidate-empty"><ImageIcon size={30} /><strong>{emptyLabel}</strong><span>접근 코드가 없으면 생성 버튼은 mock 미리보기를 만듭니다.</span></div>;
-  return <div className="candidate-grid">{candidates.map((candidate, index) => <button key={candidate.id} className={`candidate ${selected === candidate.id ? "selected" : ""}`} onClick={() => onSelect(candidate.id)}><img src={candidate.preview_url} alt={`후보 ${index + 1}`} /><span className="candidate-label">후보 {index + 1}</span><span className="mode-label">{candidate.mode === "uploaded" ? "업로드" : candidate.mode}</span>{selected === candidate.id && <i><CheckCircle2 size={22} /> 선택됨</i>}</button>)}</div>;
+  return <div className="candidate-grid">{candidates.map((candidate, index) => <button key={candidate.id} className={`candidate ${selected === candidate.id ? "selected" : ""}`} onClick={() => onSelect(candidate.id)}><img src={candidate.preview_url} alt={`후보 ${index + 1}`} /><span className="candidate-label">후보 {index + 1}</span><span className="mode-label">{candidate.media_type === "video" ? `동영상 · ${candidate.duration_sec?.toFixed(1)}초` : candidate.mode === "uploaded" ? "업로드" : candidate.mode}</span>{selected === candidate.id && <i><CheckCircle2 size={22} /> 선택됨</i>}</button>)}</div>;
+}
+
+function SceneVideoPreview({ project, scene, candidate }: { project: ProjectData; scene: Scene; candidate: ImageCandidate }) {
+  const [url, setUrl] = useState("");
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let active = true;
+    let objectUrl = "";
+    getSceneVideo(project, scene, candidate).then((blob) => {
+      if (!blob) throw new Error("동영상 파일을 찾지 못했습니다. 다시 업로드해 주세요.");
+      objectUrl = URL.createObjectURL(blob);
+      if (active) setUrl(objectUrl); else URL.revokeObjectURL(objectUrl);
+    }).catch((cause) => { if (active) setError(String(cause)); });
+    return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [project.id, scene.id, candidate.id]);
+  return <div className="panel scene-video-preview"><strong>선택한 동영상 미리보기</strong>{url && <video controls muted playsInline preload="metadata" src={url} poster={candidate.preview_url} />}{error && <div className="error-banner">{error}</div>}</div>;
 }
 
 function Complete({ project, onDownload }: { project: ProjectData; onDownload: () => void }) {
@@ -508,13 +536,13 @@ function Complete({ project, onDownload }: { project: ProjectData; onDownload: (
     <div className="complete-mark"><Check size={42} /></div>
     <div className="eyebrow">VIDEO EXPORT</div>
     <h2>{project.person} 편 영상 만들기</h2>
-    <p>3초 타이틀 뒤에 장면 이미지·자막{narrationDone ? "·녹음한 내레이션" : ""}{project.background_music ? "·배경음악" : ""}이 이어지고, 마지막에는 썸네일 배경의 인물 이름 화면이 나옵니다. 녹음하지 않은 장면은 음성 없이 재생됩니다.</p>
+    <p>3초 타이틀 뒤에 장면 이미지·동영상·자막{narrationDone ? "·녹음한 내레이션" : ""}{project.background_music ? "·배경음악" : ""}이 이어지고, 마지막에는 썸네일 배경의 인물 이름 화면이 나옵니다. 녹음하지 않은 장면은 음성 없이 재생됩니다.</p>
     <div className="summary-cards"><div><span>회차</span><strong>{String(project.episode).padStart(3, "0")}</strong></div><div><span>선택 장면</span><strong>{sceneDone}/{project.scenes.length}</strong></div><div><span>녹음 장면</span><strong>{narrationDone}/{project.scenes.length}</strong></div><div><span>영상 길이</span><strong>{duration ? `${duration}초` : "이미지 확인"}</strong></div></div>
     <div className="folder-tree"><FolderOpen size={22} /><div><strong>{project.project_path}</strong><small>완성 MP4: 05_exports/{project.folder_name}.mp4 · 1280×720 · {narrationDone ? "내레이션" : "내레이션 없음"}{project.background_music ? " + 배경음악" : ""}</small></div></div>
     <div className="video-actions"><button className="btn primary export-button" disabled={rendering} onClick={makeVideo}>{rendering ? <LoaderCircle className="spin" size={17} /> : <Download size={17} />}{rendering ? `MP4 만드는 중… ${percent}%` : video ? "MP4 다시 만들기" : "MP4 만들기"}</button>{video && <><button className="btn ghost export-button" onClick={() => downloadBlob(video, `${project.folder_name}.mp4`)}><Download size={17} /> MP4 다시 다운로드</button>{!isTauri() && <button className="btn ghost export-button" onClick={onDownload}><Download size={17} /> MP4 포함 ZIP 다운로드</button>}</>}</div>
     {rendering && <div className="render-progress"><i style={{ width: `${percent}%` }} /></div>}
     {error && <div className="error-banner">{error}</div>}
-    {video && <p className="video-ready"><CheckCircle2 size={17} /> MP4가 완성되었습니다. 자막·이미지·효과·녹음·음악을 수정하면 다시 만들어 주세요.</p>}
+    {video && <p className="video-ready"><CheckCircle2 size={17} /> MP4가 완성되었습니다. 자막·이미지·동영상·효과·녹음·음악을 수정하면 다시 만들어 주세요.</p>}
     {previewUrl && <video className="video-preview" aria-label="완성 MP4 미리보기" src={previewUrl} controls playsInline />}
     <div className="ending"><span>엔딩 메시지</span><p>“{project.ending_message || "아직 엔딩 메시지가 없습니다."}”</p></div>
   </div>;

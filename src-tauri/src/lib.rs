@@ -430,6 +430,33 @@ fn remove_scene_narration(project_path: String, scene_number: u32) -> Result<(),
     Ok(())
 }
 
+#[tauri::command]
+fn import_scene_video(project_path: String, scene_number: u32, data_url: String) -> Result<Value, String> {
+    let encoded = data_url.strip_prefix("data:video/mp4;base64,").ok_or("MP4 데이터 형식이 올바르지 않습니다.")?;
+    if encoded.len() > 67_000_000 { return Err("50MB 이하 동영상만 업로드할 수 있습니다.".into()); }
+    let bytes = STANDARD.decode(encoded).map_err(|error| error.to_string())?;
+    if bytes.len() < 12 || bytes.len() > 50_000_000 || bytes.get(4..8) != Some(&b"ftyp"[..]) {
+        return Err("50MB 이하의 올바른 MP4 파일만 업로드할 수 있습니다.".into());
+    }
+    let dir = narration_dir(&project_path, scene_number)?;
+    let id = Uuid::new_v4();
+    let path = dir.join(format!("candidate_{id}.mp4"));
+    fs::write(&path, bytes).map_err(|error| error.to_string())?;
+    Ok(serde_json::json!({"id": id.to_string(), "path": path.to_string_lossy()}))
+}
+
+#[tauri::command]
+fn read_scene_video(project_path: String, scene_number: u32, candidate_id: String) -> Result<String, String> {
+    let id = Uuid::parse_str(&candidate_id).map_err(|_| "동영상 ID가 올바르지 않습니다.")?;
+    let dir = narration_dir(&project_path, scene_number)?;
+    let path = dir.join(format!("candidate_{id}.mp4"));
+    let metadata = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 50_000_000 {
+        return Err("동영상 파일이 올바르지 않습니다.".into());
+    }
+    Ok(STANDARD.encode(fs::read(path).map_err(|error| error.to_string())?))
+}
+
 async fn generate_openai(
     api_key: &str,
     request: &GenerateRequest,
@@ -587,7 +614,9 @@ pub fn run() {
             remove_background_music,
             save_scene_narration,
             read_scene_narration,
-            remove_scene_narration
+            remove_scene_narration,
+            import_scene_video,
+            read_scene_video
         ])
         .run(tauri::generate_context!())
         .expect("error while running Great100 Studio");

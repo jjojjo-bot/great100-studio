@@ -18,6 +18,8 @@ export interface ImageCandidate {
   preview_url: string;
   created_at: string;
   mode: "mock" | "openai" | "uploaded";
+  media_type?: "image" | "video";
+  duration_sec?: number;
 }
 
 export interface Scene {

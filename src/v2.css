@@ -64,3 +64,11 @@
 .narration-file{display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:#f3f5ef;border-radius:8px;padding:10px}
 .narration-file>span{color:#355d50;font-size:11px}
 .narration-file audio{height:32px;max-width:100%}
+.scene-video-upload { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.scene-video-upload > div { display: grid; gap: 5px; }
+.scene-video-upload small { color: var(--muted, #718078); line-height: 1.5; }
+.scene-video-upload .btn { flex: none; }
+.scene-video-preview { display: grid; gap: 12px; }
+.scene-video-preview video { width: min(100%, 640px); aspect-ratio: 16 / 9; background: #172b29; border-radius: 12px; }
+.video-candidate-badge { display: inline-block; margin: 7px 0; padding: 4px 9px; border-radius: 99px; background: #e7f2eb; color: #24513d; font-weight: 700; }
+@media (max-width: 650px) { .scene-video-upload { align-items: stretch; flex-direction: column; } }

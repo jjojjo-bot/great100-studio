@@ -1,4 +1,5 @@
-import { getBackgroundMusic, getSceneNarration } from "./platform";
+import { getBackgroundMusic, getSceneNarration, getSceneVideo } from "./platform";
+import { openSceneVideo } from "./scene-video";
 import { reportForProject } from "./app-data";
 import type { CaptionBlock, ImageMotion, ProjectData } from "./types";
 
@@ -14,6 +15,7 @@ export interface VideoSegment {
   timedCaptions?: CaptionBlock[];
   emphasisSubtitle?: string;
   imageUrl?: string;
+  videoCandidateId?: string;
   supportImageUrl?: string;
   supportStartsAt?: number;
   duration: number;
@@ -51,7 +53,8 @@ export function buildVideoPlan(project: ProjectData): VideoSegment[] {
     return { title: scene.title, sceneId: scene.id, caption: project.schema_version === "2.1" ? scene.narration || "" : scene.caption ?? scene.title,
       timedCaptions: project.schema_version === "2.1" ? scene.captions?.map((block) => ({ ...block, start_sec: block.start_sec - (scene.start_sec || 0), end_sec: block.end_sec - (scene.start_sec || 0) })) : undefined,
       emphasisSubtitle: project.schema_version === "2.1" ? scene.subtitle : undefined,
-      imageUrl: image.preview_url, supportImageUrl: support?.preview_url, supportStartsAt: support ? duration / 2 : undefined,
+      imageUrl: image.preview_url, videoCandidateId: image.media_type === "video" ? image.id : undefined,
+      supportImageUrl: support?.preview_url, supportStartsAt: support ? duration / 2 : undefined,
       duration, motion: resolveImageMotion(scene.motion, index), musicVolume: sceneMusicVolume(scene.music_volume) };
   });
   const thumbnail = project.thumbnail.candidates.find((candidate) => candidate.id === project.thumbnail.selected_candidate_id);
@@ -192,12 +195,12 @@ export function activeTimedCaption(blocks: CaptionBlock[], seconds: number): str
   return blocks.find((block) => seconds >= block.start_sec && seconds < block.end_sec)?.text || "";
 }
 
-function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null, caption: string, progress: number, person: string, motion: VideoSegment["motion"], emphasis = "", emphasisAge = 0, supportImage: HTMLImageElement | null = null, supportOpacity = 0, supportProgress = 0, openingOpacity = 0, ending = false, captionOpacity = 1) {
+function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement | HTMLCanvasElement | OffscreenCanvas | null, caption: string, progress: number, person: string, motion: VideoSegment["motion"], emphasis = "", emphasisAge = 0, supportImage: HTMLImageElement | null = null, supportOpacity = 0, supportProgress = 0, openingOpacity = 0, ending = false, captionOpacity = 1) {
   const { width, height } = ctx.canvas;
   ctx.fillStyle = "#172b29";
   ctx.fillRect(0, 0, width, height);
   if (image) {
-    const placement = imagePlacement(image.naturalWidth, image.naturalHeight, width, height, motion, progress);
+    const placement = imagePlacement("naturalWidth" in image ? image.naturalWidth : image.width, "naturalHeight" in image ? image.naturalHeight : image.height, width, height, motion, progress);
     ctx.drawImage(image, placement.x, placement.y, placement.width, placement.height);
   } else {
     const gradient = ctx.createLinearGradient(0, 0, width, height);
@@ -403,6 +406,19 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
         try { supportImage = await loadImage(segment.supportImageUrl); }
         catch { throw new Error(`${segment.title} 보조 이미지를 읽지 못했습니다. 다시 업로드하거나 선택해 주세요.`); }
       }
+      let video: Awaited<ReturnType<typeof openSceneVideo>> | null = null;
+      let videoFrames: AsyncIterator<{ canvas: HTMLCanvasElement | OffscreenCanvas } | null> | null = null;
+      try {
+        if (segment.videoCandidateId) {
+          const scene = project.scenes.find((item) => item.id === segment.sceneId);
+          const candidate = scene?.candidates.find((item) => item.id === segment.videoCandidateId);
+          if (!scene || !candidate) throw new Error(`${segment.title}의 동영상 후보를 찾지 못했습니다.`);
+          const blob = await getSceneVideo(project, scene, candidate);
+          if (!blob) throw new Error(`${segment.title}의 동영상 파일을 찾지 못했습니다. 다시 업로드해 주세요.`);
+          video = await openSceneVideo(blob);
+          const timestamps = Array.from({ length: frameCounts[segmentIndex] }, (_, index) => video!.firstTimestamp + Math.min(index / VIDEO_FPS, video!.duration - 0.001));
+          videoFrames = video.sink.canvasesAtTimestamps(timestamps)[Symbol.asyncIterator]();
+        }
       for (let localFrame = 0; localFrame < frameCounts[segmentIndex]; localFrame++) {
         const progress = frameCounts[segmentIndex] === 1 ? 0 : localFrame / (frameCounts[segmentIndex] - 1);
         const seconds = localFrame / VIDEO_FPS;
@@ -414,7 +430,9 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
         const motionProgress = (segment.motionStart ?? 0) + progress * ((segment.motionEnd ?? 1) - (segment.motionStart ?? 0));
         const openingOpacity = segment.opening ? Math.min(1, (1 - progress) * segment.duration / 0.8) : 0;
         const captionOpacity = segmentIndex === 1 ? Math.min(1, seconds / 0.5) : 1;
-        drawFrame(ctx, image, part, motionProgress, project.person, segment.motion, segment.emphasisSubtitle && seconds < 3 ? segment.emphasisSubtitle : "", seconds, supportImage, supportOpacity, supportProgress, openingOpacity, !!segment.ending, captionOpacity);
+        const decoded = videoFrames ? await videoFrames.next() : null;
+        const visual = decoded && !decoded.done && decoded.value ? decoded.value.canvas : image;
+        drawFrame(ctx, visual, part, motionProgress, project.person, segment.motion, segment.emphasisSubtitle && seconds < 3 ? segment.emphasisSubtitle : "", seconds, supportImage, supportOpacity, supportProgress, openingOpacity, !!segment.ending, captionOpacity);
         await source.add(frame / VIDEO_FPS, 1 / VIDEO_FPS);
         frame++;
         if (frame % 7 === 0 || frame === totalFrames) await feedAudioUntil(Math.min(totalFrames / VIDEO_FPS, frame / VIDEO_FPS + 0.5));
@@ -423,6 +441,7 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
           await new Promise((resolve) => setTimeout(resolve, 0));
         }
       }
+      } finally { video?.input.dispose(); }
     }
     await feedAudioUntil(totalFrames / VIDEO_FPS);
     audioSource?.close();

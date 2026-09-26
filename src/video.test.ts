@@ -27,6 +27,17 @@ describe("MP4 제작 계획", () => {
     expect(plan.at(-1)).toMatchObject({ ending: true, duration: 4, motion: "none" });
   });
 
+  it("선택한 장면 MP4를 계획에 연결하고 오프닝에는 첫 화면을 쓴다", () => {
+    const project = createProjectDraft(2, "이순신", "장군 · 지도자", SAMPLE_WORK_TEXT);
+    project.scenes = [project.scenes[0]];
+    project.scenes[0].candidates = [{ id: "clip", path: "candidate_clip.mp4", preview_url: "poster-url", created_at: "now", mode: "uploaded", media_type: "video", duration_sec: 5 }];
+    project.scenes[0].selected_candidate_id = "clip";
+    const plan = buildVideoPlan(project);
+    expect(plan[0]).toMatchObject({ opening: true, imageUrl: "poster-url" });
+    expect(plan[0].videoCandidateId).toBeUndefined();
+    expect(plan[1]).toMatchObject({ sceneId: project.scenes[0].id, imageUrl: "poster-url", videoCandidateId: "clip" });
+  });
+
   it("선택한 보조 이미지를 장면 후반부에, 썸네일을 마지막 이름 화면에 연결한다", () => {
     const project = createProjectDraft(2, "이순신", "장군 · 지도자", SAMPLE_WORK_TEXT);
     project.scenes = [project.scenes[0]];

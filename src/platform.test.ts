@@ -42,6 +42,23 @@ describe("project export", () => {
     expect(zip.file(`${folder}selected.png`)).not.toBeNull();
   });
 
+  it("선택한 장면 MP4 원본을 후보와 selected 파일로 내보낸다", async () => {
+    vi.stubGlobal("window", {});
+    const project = createProjectDraft(3, "동영상 시험", "장군 · 지도자", SAMPLE_WORK_TEXT);
+    project.project_path = `projects/${project.folder_name}`;
+    const candidate = { id: "clip", path: `${project.project_path}/03_images/scene01/candidate_clip.mp4`, preview_url: "data:image/jpeg;base64,a", created_at: "now", mode: "uploaded" as const, media_type: "video" as const, duration_sec: 2 };
+    project.scenes[0].candidates = [candidate];
+    project.scenes[0].selected_candidate_id = candidate.id;
+    const bytes = new Uint8Array([0, 0, 0, 12, 102, 116, 121, 112, 1, 2, 3, 4]);
+    await listProjects();
+    const db = await openDB("great100-studio", 4);
+    await db.put("media", { id: `${project.id}:scene-video:clip`, blob: new Blob([bytes], { type: "video/mp4" }) });
+    const zip = await JSZip.loadAsync(await (await buildProjectZip(project)).arrayBuffer());
+    const folder = `${project.folder_name}/03_images/scene01/`;
+    expect(new Uint8Array(await zip.file(`${folder}candidate_clip.mp4`)!.async("uint8array"))).toEqual(bytes);
+    expect(new Uint8Array(await zip.file(`${folder}selected.mp4`)!.async("uint8array"))).toEqual(bytes);
+  });
+
   it("includes the finished MP4 inside 05_exports", async () => {
     const project = createProjectDraft(2, "이순신", "장군 · 지도자", SAMPLE_WORK_TEXT);
     project.project_path = `projects/${project.folder_name}`;
@@ -152,7 +169,7 @@ describe("project deletion", () => {
     removed.project_path = await createProjectOnDisk(removed);
     await saveProject(removed);
     await saveRenderedVideo(removed, new Blob(["test"], { type: "video/mp4" }));
-    const db = await openDB("great100-studio", 3);
+    const db = await openDB("great100-studio", 4);
     const recordingKey = `${removed.id}:narration:${removed.scenes[0].id}`;
     await db.put("audio", { id: recordingKey, blob: new Blob(["voice"]) });
     const kept = createProjectDraft(22, "보존 시험", "장군 · 지도자", SAMPLE_WORK_TEXT);
@@ -174,7 +191,7 @@ describe("video cache", () => {
     vi.stubGlobal("window", {});
     const project = createProjectDraft(25, "영상 시험", "장군 · 지도자", SAMPLE_WORK_TEXT);
     project.project_path = await createProjectOnDisk(project);
-    const db = await openDB("great100-studio", 3);
+    const db = await openDB("great100-studio", 4);
     await db.put("videos", { id: project.id, updated_at: project.updated_at, blob: new Blob(["old"], { type: "video/mp4" }) });
     expect(await getRenderedVideo(project)).toBeNull();
     await saveRenderedVideo(project, new Blob(["new"], { type: "video/mp4" }));
