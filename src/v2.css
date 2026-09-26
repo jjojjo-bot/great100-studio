@@ -103,6 +103,7 @@
 .waveform-bars i { flex: 1; min-width: 1px; background: #4e806e; border-radius: 2px; }
 .waveform-caption { position: absolute; top: 8px; height: 64px; display: flex; align-items: center; justify-content: space-between; min-width: 7px; border: 2px solid #ad6e35; border-radius: 5px; color: #563612; background: #efc87999; cursor: grab; user-select: none; z-index: 1; }
 .waveform-caption b { overflow: hidden; font-size: 12px; }
-.waveform-handle { width: 7px; height: 100%; flex: none; background: #ad6e35; cursor: ew-resize; }
+.waveform-handle { width: 12px; height: 100%; flex: none; background: #ad6e35; cursor: ew-resize; }
+.waveform-handle:hover { background: #854a1d; }
 .waveform-playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: #cf3d3d; pointer-events: none; z-index: 2; }
 .waveform-ruler { display: flex; justify-content: space-between; font-size: 11px; color: #6f7772; }
