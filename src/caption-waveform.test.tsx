@@ -48,4 +48,18 @@ describe("자막 시간 막대", () => {
       expect.objectContaining({ start_sec: 4, end_sec: 10 }),
     ] }));
   });
+
+  it("초기화 버튼은 변경한 시간을 원래 값으로 되돌린다", () => {
+    const scene = createProjectDraft(1, "세종대왕", "왕", SAMPLE_WORK_TEXT).scenes[0];
+    scene.start_sec = 0; scene.duration = 10;
+    scene.captions = [{ text: "바뀐 문구", start_sec: 0, end_sec: 4 }, { text: "둘째", start_sec: 4, end_sec: 10 }];
+    const original = [{ text: "원래 문구", start_sec: 0, end_sec: 3 }, { text: "둘째", start_sec: 3, end_sec: 10 }];
+    const onChange = vi.fn();
+    const { container } = render(<CaptionWaveform scene={scene} originalCaptions={original} onChange={onChange} />);
+    fireEvent.click(within(container).getByRole("button", { name: "제작안 시간으로 초기화" }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ captions: [
+      { text: "바뀐 문구", start_sec: 0, end_sec: 3 },
+      { text: "둘째", start_sec: 3, end_sec: 10 },
+    ] }));
+  });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { moveCaption, redistributeCaptions } from "./CaptionWaveform";
+import { moveCaption, redistributeCaptions, resetCaptionTiming } from "./CaptionWaveform";
 
 describe("녹음 파형 자막 이동", () => {
   const blocks = [
@@ -35,5 +35,14 @@ describe("녹음 파형 자막 이동", () => {
     const result = redistributeCaptions(blocks, 0, 99, 10, 8);
     expect(result[0].end_sec).toBe(17.9);
     expect(result[1]).toMatchObject({ start_sec: 17.9, end_sec: 18 });
+  });
+
+  it("제작안 시간으로 초기화할 때 수정한 문구는 유지한다", () => {
+    const edited = [{ text: "수정한 문구", start_sec: 10.5, end_sec: 12.5 }, blocks[1]];
+    expect(resetCaptionTiming(edited, blocks)).toEqual([
+      { text: "수정한 문구", start_sec: 10, end_sec: 12 },
+      blocks[1],
+    ]);
+    expect(resetCaptionTiming(edited, undefined)).toBe(edited);
   });
 });

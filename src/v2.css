@@ -98,6 +98,8 @@
 .preview-controls input { flex: 1; min-width: 40px; }
 .preview-controls span { font-size: 12px; white-space: nowrap; }
 .caption-waveform { width: 100%; display: grid; gap: 6px; padding-top: 12px; border-top: 1px solid #dde3db; }
+.caption-waveform-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.caption-waveform-head .btn { padding: 7px 10px; font-size: 12px; }
 .waveform-track { position: relative; height: 80px; border-radius: 8px; overflow: hidden; background: #e6eee8; touch-action: none; }
 .waveform-bars { position: absolute; inset: 0; display: flex; align-items: center; gap: 1px; opacity: .55; }
 .waveform-bars i { flex: 1; min-width: 1px; background: #4e806e; border-radius: 2px; }

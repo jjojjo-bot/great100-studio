@@ -112,7 +112,7 @@ export function SceneNarrationPanel({ project, scene, onChange }: { project: Pro
       <button className="btn ghost" disabled={busy || recording} onClick={() => input.current?.click()}>{busy ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />} 파일 업로드</button>
     </div>
     {scene.narration_audio && <div className="narration-file"><span>{scene.narration_audio.name} · {scene.narration_audio.duration_sec.toFixed(1)}초</span>{previewUrl && <audio controls preload="metadata" src={previewUrl} onTimeUpdate={(event) => setPlayhead(event.currentTarget.currentTime)} aria-label={`Scene ${scene.number} 내레이션 미리듣기`} />}<button className="btn ghost" disabled={busy || recording} onClick={() => void remove()}><Trash2 size={15} /> 제거</button></div>}
-    {scene.narration_audio && project.schema_version === "2.1" && <CaptionWaveform blob={previewBlob} scene={scene} onChange={onChange} playhead={playhead} />}
+    {scene.narration_audio && project.schema_version === "2.1" && <CaptionWaveform blob={previewBlob} scene={scene} originalCaptions={project.source?.scenes.find((item) => item.id === (scene.source_scene_id || scene.id))?.captions} onChange={onChange} playhead={playhead} />}
     <small className="narration-hint">MP3·WAV·M4A·MP4·WebM, 30MB 이하. 장면보다 짧은 녹음은 나머지 시간에 음악만 재생되고, 긴 녹음은 저장 전에 안내합니다. 목소리가 나올 때 배경음악은 자동으로 작아집니다.</small>
     {error && <div className="error-banner">{error}</div>}
   </div>;
