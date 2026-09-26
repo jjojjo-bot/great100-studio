@@ -165,7 +165,7 @@ function App() {
           <div className="progress-wrap"><span>{progress}%</span><div><i style={{ width: `${progress}%` }} /></div></div>
         </header>
 
-        <section className="workspace">
+        <section className={`workspace${step === 5 ? " scene-workspace-root" : ""}`}>
           {notice && <div className="toast" onClick={() => setNotice("")}>{notice}</div>}
           {step === 0 && <Dashboard onStart={() => setStep(1)} projects={projects} accessCode={accessCode} onAccessCode={(code) => { updateAccessCode(code); setAccessCode(code); }} onOpen={(item) => { setProject(item); setStep(2); }} onDownload={download} onDelete={removeProject} deletingId={deletingId} />}
           {step === 1 && (

@@ -111,6 +111,7 @@
 .waveform-ruler { display: flex; justify-content: space-between; font-size: 11px; color: #6f7772; }
 
 .scene-page { max-width: 1560px; }
+.workspace.scene-workspace-root { overflow: visible; }
 .scene-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(400px, 1.08fr); gap: 22px; align-items: start; }
 .scene-workspace-controls { min-width: 0; }
 .scene-workspace-controls > .panel { padding: 20px; margin-bottom: 18px; }
@@ -118,7 +119,7 @@
 .scene-workspace-controls .video-intro-choice select { min-width: 0; flex: 1; }
 .scene-workspace-controls .video-intro-choice img { flex: none; }
 .scene-workspace-controls .timing-control input { margin: 4px 0 2px; }
-.scene-workspace-preview { min-width: 0; position: sticky; top: 22px; display: grid; gap: 16px; max-height: calc(100vh - 44px); overflow-y: auto; scrollbar-width: thin; }
+.scene-workspace-preview { min-width: 0; position: sticky; top: 20px; display: grid; gap: 16px; max-height: calc(100vh - 100px); overflow-y: auto; scrollbar-width: thin; }
 .scene-workspace-preview .full-video-preview, .scene-preview-empty { padding: 16px; }
 .scene-preview-empty p { color: #69776f; font-size: 13px; }
 .scene-workspace-controls .candidate-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
