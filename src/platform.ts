@@ -309,6 +309,23 @@ export async function getSceneVideo(project: ProjectData, scene: Scene, candidat
   return saved?.blob || null;
 }
 
+export async function deleteCandidateAsset(project: ProjectData, kind: "anchor" | "scene" | "support" | "thumbnail", candidate: ImageCandidate, sceneNumber?: number): Promise<void> {
+  const scene = sceneNumber === undefined ? undefined : project.scenes.find((item) => item.number === sceneNumber);
+  const candidates = kind === "anchor" ? project.anchor.candidates : kind === "thumbnail" ? project.thumbnail.candidates
+    : kind === "scene" ? scene?.candidates : scene?.support_candidates;
+  if (!candidates?.some((item) => item.id === candidate.id && item.path === candidate.path)) {
+    throw new Error("삭제할 후보가 현재 프로젝트에 없습니다. 화면을 새로고침해 주세요.");
+  }
+  if (isTauri()) {
+    await invoke("delete_candidate_file", { projectPath: project.project_path, assetKind: kind, sceneNumber, candidateId: candidate.id, candidatePath: candidate.path });
+  }
+  const db = await database();
+  const tx = db.transaction(["media", "videos"], "readwrite");
+  if (candidate.media_type === "video") await tx.objectStore("media").delete(sceneVideoKey(project, candidate.id));
+  await tx.objectStore("videos").delete(project.id);
+  await tx.done;
+}
+
 function candidatePath(request: ImageLocation, id: string, extension: string) {
   const folder = request.asset_kind === "scene" || request.asset_kind === "support" ? `03_images/scene${String(request.scene_number).padStart(2, "0")}` : request.asset_kind === "anchor" ? "02_character" : "04_thumbnail";
   const prefix = request.asset_kind === "support" ? "support_" : "candidate_";

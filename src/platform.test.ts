@@ -3,7 +3,7 @@ import "fake-indexeddb/auto";
 import JSZip from "jszip";
 import { openDB } from "idb";
 import { createProjectDraft } from "./parser";
-import { buildProjectZip, createProjectOnDisk, deleteProject, detectImageFormat, detectMusicFormat, detectNarrationFormat, getBackgroundMusic, getRenderedVideo, getSceneNarration, importImageCandidates, listProjects, removeBackgroundMusic, removeSceneNarration, saveBackgroundMusic, saveProject, saveRenderedVideo, saveSceneNarration } from "./platform";
+import { buildProjectZip, createProjectOnDisk, deleteCandidateAsset, deleteProject, detectImageFormat, detectMusicFormat, detectNarrationFormat, getBackgroundMusic, getRenderedVideo, getSceneNarration, importImageCandidates, listProjects, removeBackgroundMusic, removeSceneNarration, saveBackgroundMusic, saveProject, saveRenderedVideo, saveSceneNarration } from "./platform";
 import { SAMPLE_WORK_TEXT } from "./sample";
 
 describe("project export", () => {
@@ -183,6 +183,29 @@ describe("project deletion", () => {
     expect(remaining.some((item) => item.id === kept.id)).toBe(true);
     expect(await getRenderedVideo(removed)).toBeNull();
     expect(await db.get("audio", recordingKey)).toBeUndefined();
+  });
+});
+
+describe("candidate deletion", () => {
+  it("removes only the selected clip blob and invalidates the cached render", async () => {
+    vi.stubGlobal("window", {});
+    const project = createProjectDraft(26, "후보 삭제 시험", "장군 · 지도자", SAMPLE_WORK_TEXT);
+    project.project_path = await createProjectOnDisk(project);
+    const scene = project.scenes[0];
+    const clip = { id: "clip-to-remove", path: `${project.project_path}/03_images/scene01/candidate_clip-to-remove.mp4`, preview_url: "poster", created_at: "now", mode: "uploaded" as const, media_type: "video" as const };
+    scene.candidates = [clip];
+    await saveProject(project);
+    await saveRenderedVideo(project, new Blob(["render"], { type: "video/mp4" }));
+    const db = await openDB("great100-studio", 4);
+    const removedKey = `${project.id}:scene-video:${clip.id}`;
+    const keptKey = `${project.id}:scene-video:other`;
+    await db.put("media", { id: removedKey, blob: new Blob(["remove"]) });
+    await db.put("media", { id: keptKey, blob: new Blob(["keep"]) });
+    await expect(deleteCandidateAsset(project, "thumbnail", clip)).rejects.toThrow("현재 프로젝트");
+    await deleteCandidateAsset(project, "scene", clip, scene.number);
+    expect(await db.get("media", removedKey)).toBeUndefined();
+    expect(await db.get("media", keptKey)).toBeDefined();
+    expect(await getRenderedVideo(project)).toBeNull();
   });
 });
 

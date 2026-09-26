@@ -26,7 +26,8 @@ import {
 import { createProjectDraft, DEFAULT_STYLE, parseWorkText } from "./parser";
 import { completionErrors, createV2ProjectDraft, parseAppData, reportForProject } from "./app-data";
 import { composeScenePrompt, composeThumbnailPrompt } from "./prompts";
-import { createProjectOnDisk, deleteProject, downloadBlob, exportProjectZip, generateImages, getAccessCode, getBackgroundMusic, getRenderedVideo, getSceneVideo, importImageCandidates, importSceneVideo, isTauri, listProjects, removeBackgroundMusic, removeSceneNarration, saveBackgroundMusic, saveProject, saveRenderedVideo, setAccessCode } from "./platform";
+import { createProjectOnDisk, deleteCandidateAsset, deleteProject, downloadBlob, exportProjectZip, generateImages, getAccessCode, getBackgroundMusic, getRenderedVideo, getSceneVideo, importImageCandidates, importSceneVideo, isTauri, listProjects, removeBackgroundMusic, removeSceneNarration, saveBackgroundMusic, saveProject, saveRenderedVideo, setAccessCode } from "./platform";
+import { findCandidate, withoutAssetCandidate, withoutSceneCandidate } from "./candidates";
 import { buildVideoPlan, renderProjectMp4, resolveVideoIntroImage, sceneMusicVolume } from "./video";
 import { SceneNarrationPanel } from "./SceneNarrationPanel";
 import { SAMPLE_WORK_TEXT } from "./sample";
@@ -343,12 +344,16 @@ function AssetStudio({ title, eyebrow, description, asset, project, kind, onChan
     } catch (cause) { setError(String(cause)); }
     finally { setUploading(false); }
   };
+  const removeCandidate = async (id: string) => {
+    await deleteCandidateAsset(project, kind, findCandidate(asset.candidates, id));
+    onChange(withoutAssetCandidate(asset, id));
+  };
   return <div className="page">
     <PageHeading eyebrow={eyebrow} title={title} text={description} />
     <PromptEditor heading={kind === "thumbnail" ? "썸네일 내용 (수정 가능)" : "이미지 프롬프트"} value={asset.prompt} historyCount={asset.prompt_history.length} onChange={(prompt) => { setCopied(false); onChange({ ...asset, prompt }); }} onGenerate={generate} onUpload={upload} generating={asset.status === "generating"} uploading={uploading} />
     {kind === "thumbnail" && <div className="panel full-prompt-panel"><div className="full-prompt-head"><div><strong>복사용 전체 썸네일 프롬프트</strong><small>썸네일 내용 + 인물 외형 + 스타일 조건을 중복 없이 합칩니다.</small></div><button className="btn ghost" disabled={!asset.prompt.trim()} onClick={copyFullPrompt}>{copied ? <Check size={16} /> : <Copy size={16} />}{copied ? "복사됨" : "전체 프롬프트 복사"}</button></div><textarea aria-label="복사용 전체 썸네일 프롬프트" readOnly value={fullPrompt} /></div>}
     {error && <div className="error-banner">{error}</div>}
-    <CandidateGrid candidates={asset.candidates} selected={asset.selected_candidate_id} onSelect={(id) => onChange({ ...asset, selected_candidate_id: id })} emptyLabel="이미지를 업로드하거나 후보 3장을 생성해 보세요" />
+    <CandidateGrid candidates={asset.candidates} selected={asset.selected_candidate_id} onSelect={(id) => onChange({ ...asset, selected_candidate_id: id })} onDelete={removeCandidate} emptyLabel="이미지를 업로드하거나 후보 3장을 생성해 보세요" />
   </div>;
 }
 
@@ -453,6 +458,11 @@ function SceneStudio({ project, onChange, onProjectChange }: { project: ProjectD
     } catch (cause) { setError(String(cause)); }
     finally { setSupportBusy(false); }
   };
+  const removeCandidate = async (id: string, support = false) => {
+    const candidate = findCandidate(support ? scene.support_candidates || [] : scene.candidates, id);
+    await deleteCandidateAsset(project, support ? "support" : "scene", candidate, scene.number);
+    onChange(withoutSceneCandidate(scene, id, support));
+  };
   const position = project.scenes.findIndex((item) => item.id === scene.id);
   const selectedVideo = scene.candidates.find((candidate) => candidate.id === scene.selected_candidate_id)?.media_type === "video";
   const introImages = scene.candidates.filter((candidate) => candidate.media_type !== "video");
@@ -472,10 +482,10 @@ function SceneStudio({ project, onChange, onProjectChange }: { project: ProjectD
     <SceneNarrationPanel key={scene.id} project={project} scene={scene} onChange={onChange} />
     <div className="panel music-volume-panel"><label><strong>이 장면의 배경음악 볼륨</strong><small>{project.background_music ? "장면이 바뀔 때 볼륨도 부드럽게 바뀝니다." : "음악을 추가하면 이 설정이 적용됩니다."}</small><input aria-label="장면 배경음악 볼륨" type="range" min="0" max="100" step="1" value={sceneMusicVolume(scene.music_volume)} onChange={(event) => onChange({ ...scene, music_volume: Number(event.target.value) })} /></label><output>{sceneMusicVolume(scene.music_volume)}%</output></div>
     {error && <div className="error-banner">{error}</div>}
-    <CandidateGrid candidates={scene.candidates} selected={scene.selected_candidate_id} onSelect={(id) => onChange({ ...scene, selected_candidate_id: id })} emptyLabel="이 장면의 이미지나 동영상을 업로드해 보세요" />
+    <CandidateGrid candidates={scene.candidates} selected={scene.selected_candidate_id} onSelect={(id) => onChange({ ...scene, selected_candidate_id: id })} onDelete={(id) => removeCandidate(id)} emptyLabel="이 장면의 이미지나 동영상을 업로드해 보세요" />
     {selectedVideo && introImages.length > 0 && <div className="panel video-intro-panel"><div><strong>동영상 앞에 보여줄 이미지</strong><small>장면 시간 안에서 최대 1.5초 표시한 뒤 0.3초 동안 동영상으로 부드럽게 전환됩니다. 자막은 두 화면 모두에 표시됩니다.</small></div><div className="video-intro-choice"><select aria-label="동영상 앞 이미지" value={scene.video_intro_candidate_id === null ? "none" : scene.video_intro_candidate_id ?? "auto"} onChange={(event) => onChange({ ...scene, video_intro_candidate_id: event.target.value === "none" ? null : event.target.value === "auto" ? undefined : event.target.value })}><option value="auto">자동 · 최근 업로드 이미지</option><option value="none">이미지 없이 동영상만</option>{introImages.map((candidate, index) => <option key={candidate.id} value={candidate.id}>이미지 후보 {index + 1}{candidate.mode === "uploaded" ? " · 업로드" : ""}</option>)}</select>{introImage && <img src={introImage.preview_url} alt="동영상 앞에 표시할 이미지" />}</div></div>}
     {selectedVideo && <SceneVideoPreview project={project} scene={scene} candidate={scene.candidates.find((candidate) => candidate.id === scene.selected_candidate_id)!} />}
-    {project.schema_version !== 1 && scene.support_image_prompt && <><div className="panel support-panel"><h3>보조 이미지 · 별도 생성</h3><p className="support-hint">선택한 보조 이미지는 이 장면의 후반부에 부드럽게 전환되어 MP4에 들어갑니다.</p><textarea aria-label="보조 이미지 프롬프트" value={scene.support_image_prompt} onChange={(event) => onChange({ ...scene, support_image_prompt: event.target.value })} /><div className="prompt-actions"><label className="btn ghost support-upload">보조 이미지 업로드<input type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => { const files = Array.from(event.target.files || []); event.target.value = ""; if (files.length) void uploadSupport(files); }} /></label><button className="btn primary" disabled={supportBusy} onClick={generateSupport}>{supportBusy ? "처리 중…" : "보조 후보 2장 생성"}</button></div></div><CandidateGrid candidates={scene.support_candidates || []} selected={scene.support_selected_candidate_id} onSelect={(id) => onChange({ ...scene, support_selected_candidate_id: id })} emptyLabel="보조 이미지는 선택 사항입니다" /></>}
+    {project.schema_version !== 1 && (scene.support_image_prompt || scene.support_candidates?.length) && <><div className="panel support-panel"><h3>보조 이미지 · 별도 생성</h3><p className="support-hint">선택한 보조 이미지는 이 장면의 후반부에 부드럽게 전환되어 MP4에 들어갑니다.</p><textarea aria-label="보조 이미지 프롬프트" value={scene.support_image_prompt || ""} onChange={(event) => onChange({ ...scene, support_image_prompt: event.target.value })} /><div className="prompt-actions"><label className="btn ghost support-upload">보조 이미지 업로드<input type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => { const files = Array.from(event.target.files || []); event.target.value = ""; if (files.length) void uploadSupport(files); }} /></label><button className="btn primary" disabled={supportBusy} onClick={generateSupport}>{supportBusy ? "처리 중…" : "보조 후보 2장 생성"}</button></div></div><CandidateGrid candidates={scene.support_candidates || []} selected={scene.support_selected_candidate_id} onSelect={(id) => onChange({ ...scene, support_selected_candidate_id: id })} onDelete={(id) => removeCandidate(id, true)} emptyLabel="보조 이미지는 선택 사항입니다" /></>}
   </div>;
 }
 
@@ -493,9 +503,21 @@ function PromptEditor({ heading = "이미지 프롬프트", value, historyCount,
   return <div className="panel prompt-panel"><div className="prompt-head"><div><strong>{heading}</strong><small>수정 이력 {historyCount}개</small></div><div className="prompt-actions"><input ref={input} className="file-input" type="file" accept="image/png,image/jpeg,image/webp" multiple aria-label="후보 이미지 파일 선택" onChange={(event) => { const files = Array.from(event.target.files || []); event.target.value = ""; if (files.length) onUpload(files); }} /><button className="btn ghost" disabled={generating || uploading} onClick={() => input.current?.click()}>{uploading ? <LoaderCircle className="spin" size={17} /> : <Upload size={17} />}{uploading ? "업로드 중…" : "이미지 업로드"}</button><button className="btn primary" disabled={generating || uploading} onClick={onGenerate}>{generating ? <LoaderCircle className="spin" size={17} /> : <WandSparkles size={17} />}{generating ? "생성 중…" : `후보 ${generateCount}장 생성`}</button></div></div><textarea value={value} onChange={(e) => onChange(e.target.value)} /><p className="upload-hint">ChatGPT Plus에서 만든 PNG·JPEG·WebP를 업로드할 수 있어요. 최대 6장, 각 12MB.</p></div>;
 }
 
-function CandidateGrid({ candidates, selected, onSelect, emptyLabel }: { candidates: ImageCandidate[]; selected?: string; onSelect: (id: string) => void; emptyLabel: string }) {
+function CandidateGrid({ candidates, selected, onSelect, onDelete, emptyLabel }: { candidates: ImageCandidate[]; selected?: string; onSelect: (id: string) => void; onDelete?: (id: string) => Promise<void>; emptyLabel: string }) {
+  const [deletingId, setDeletingId] = useState("");
+  const [error, setError] = useState("");
+  const remove = async (candidate: ImageCandidate, index: number) => {
+    if (!onDelete) return;
+    const media = candidate.media_type === "video" ? "동영상" : "이미지";
+    const selectedWarning = selected === candidate.id ? "\n선택된 후보라서 다시 다른 후보를 골라야 합니다." : "";
+    if (!window.confirm(`${media} 후보 ${index + 1} 삭제할까요?${selectedWarning}\n\n삭제한 파일은 복구할 수 없고, 기존 MP4는 다시 만들어야 합니다.`)) return;
+    setDeletingId(candidate.id); setError("");
+    try { await onDelete(candidate.id); }
+    catch (cause) { setError(`후보 삭제 실패: ${String(cause)}`); }
+    finally { setDeletingId(""); }
+  };
   if (!candidates.length) return <div className="candidate-empty"><ImageIcon size={30} /><strong>{emptyLabel}</strong><span>접근 코드가 없으면 생성 버튼은 mock 미리보기를 만듭니다.</span></div>;
-  return <div className="candidate-grid">{candidates.map((candidate, index) => <button key={candidate.id} className={`candidate ${selected === candidate.id ? "selected" : ""}`} onClick={() => onSelect(candidate.id)}><img src={candidate.preview_url} alt={`후보 ${index + 1}`} /><span className="candidate-label">후보 {index + 1}</span><span className="mode-label">{candidate.media_type === "video" ? `동영상 · ${candidate.duration_sec?.toFixed(1)}초` : candidate.mode === "uploaded" ? "업로드" : candidate.mode}</span>{selected === candidate.id && <i><CheckCircle2 size={22} /> 선택됨</i>}</button>)}</div>;
+  return <><div className="candidate-grid">{candidates.map((candidate, index) => <div key={candidate.id} className="candidate-card"><button className={`candidate ${selected === candidate.id ? "selected" : ""}`} disabled={!!deletingId} onClick={() => onSelect(candidate.id)}><img src={candidate.preview_url} alt={`후보 ${index + 1}`} /><span className="candidate-label">후보 {index + 1}</span><span className="mode-label">{candidate.media_type === "video" ? `동영상 · ${candidate.duration_sec?.toFixed(1)}초` : candidate.mode === "uploaded" ? "업로드" : candidate.mode}</span>{selected === candidate.id && <i><CheckCircle2 size={22} /> 선택됨</i>}</button>{onDelete && <button className="candidate-delete" aria-label={`후보 ${index + 1} 삭제`} title={`${candidate.media_type === "video" ? "동영상" : "이미지"} 후보 삭제`} disabled={!!deletingId} onClick={() => void remove(candidate, index)}>{deletingId === candidate.id ? <LoaderCircle className="spin" size={15} /> : <Trash2 size={15} />}<span>삭제</span></button>}</div>)}</div>{error && <div className="error-banner">{error}</div>}</>;
 }
 
 function SceneVideoPreview({ project, scene, candidate }: { project: ProjectData; scene: Scene; candidate: ImageCandidate }) {

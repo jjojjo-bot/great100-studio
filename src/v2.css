@@ -78,3 +78,8 @@
 .video-intro-choice select { min-width: 220px; max-width: 100%; padding: 10px 12px; border: 1px solid #d7dfd9; border-radius: 10px; background: white; }
 .video-intro-choice img { width: 120px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 8px; }
 @media (max-width: 650px) { .scene-video-upload { align-items: stretch; flex-direction: column; } }
+.candidate-card { position: relative; min-width: 0; }
+.candidate-card .candidate { display: block; width: 100%; height: 100%; }
+.candidate-delete { position: absolute; left: 9px; bottom: 9px; z-index: 2; display: inline-flex; align-items: center; gap: 4px; padding: 6px 9px; border: 1px solid rgba(255,255,255,.7); border-radius: 7px; background: rgba(47,56,50,.84); color: #fff; font-size: 10px; cursor: pointer; }
+.candidate-delete:hover { background: #a34131; }
+.candidate-delete:disabled { opacity: .6; cursor: wait; }

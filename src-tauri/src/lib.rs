@@ -457,6 +457,45 @@ fn read_scene_video(project_path: String, scene_number: u32, candidate_id: Strin
     Ok(STANDARD.encode(fs::read(path).map_err(|error| error.to_string())?))
 }
 
+#[tauri::command]
+fn delete_candidate_file(project_path: String, asset_kind: String, scene_number: Option<u32>, candidate_id: String, candidate_path: String) -> Result<(), String> {
+    let project_dir = safe_project_path(&project_path)?;
+    let data: Value = serde_json::from_slice(&fs::read(project_dir.join("project_data.json")).map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())?;
+    let asset = match asset_kind.as_str() {
+        "anchor" => data.get("anchor"),
+        "thumbnail" => data.get("thumbnail"),
+        "scene" | "support" => {
+            let number = scene_number.ok_or("장면 번호가 없습니다.")?;
+            if !(1..=9999).contains(&number) { return Err("장면 번호가 올바르지 않습니다.".into()); }
+            data.get("scenes").and_then(Value::as_array)
+                .and_then(|scenes| scenes.iter().find(|scene| scene.get("number").and_then(Value::as_u64) == Some(number as u64)))
+        },
+        _ => return Err("후보 종류가 올바르지 않습니다.".into()),
+    }.ok_or("후보 목록을 찾지 못했습니다.")?;
+    let key = if asset_kind == "support" { "support_candidates" } else { "candidates" };
+    let registered = asset.get(key).and_then(Value::as_array)
+        .map(|items| items.iter().any(|item| item.get("id").and_then(Value::as_str) == Some(candidate_id.as_str())
+            && item.get("path").and_then(Value::as_str) == Some(candidate_path.as_str())))
+        .unwrap_or(false);
+    if !registered { return Err("삭제할 후보가 프로젝트에 등록되어 있지 않습니다.".into()); }
+
+    let dir = asset_output_dir(&project_dir, &asset_kind, scene_number)?;
+    let dir_metadata = fs::symlink_metadata(&dir).map_err(|error| error.to_string())?;
+    if !dir_metadata.is_dir() || dir_metadata.file_type().is_symlink() { return Err("후보 폴더가 올바르지 않습니다.".into()); }
+    let path = PathBuf::from(&candidate_path);
+    if path.parent() != Some(dir.as_path()) { return Err("프로젝트 폴더 밖의 파일은 삭제할 수 없습니다.".into()); }
+    let filename = path.file_name().and_then(|value| value.to_str()).ok_or("후보 파일명이 올바르지 않습니다.")?;
+    let (stem, extension) = filename.rsplit_once('.').ok_or("후보 파일명이 올바르지 않습니다.")?;
+    let uuid = stem.strip_prefix("candidate_").or_else(|| stem.strip_prefix("mock_candidate_"))
+        .ok_or("후보 파일명이 올바르지 않습니다.")?;
+    Uuid::parse_str(uuid).map_err(|_| "후보 파일명이 올바르지 않습니다.")?;
+    if !["png", "jpg", "webp", "svg", "mp4"].contains(&extension) { return Err("후보 파일 형식이 올바르지 않습니다.".into()); }
+    let metadata = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() { return Err("후보 파일이 올바르지 않습니다.".into()); }
+    fs::remove_file(path).map_err(|error| error.to_string())
+}
+
 async fn generate_openai(
     api_key: &str,
     request: &GenerateRequest,
@@ -616,7 +655,8 @@ pub fn run() {
             read_scene_narration,
             remove_scene_narration,
             import_scene_video,
-            read_scene_video
+            read_scene_video,
+            delete_candidate_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running Great100 Studio");
