@@ -51,7 +51,8 @@
 .caption-block-row label{font-size:10px;color:#6c7971}
 .caption-block-row input{margin-top:4px}
 .caption-settings{display:flex;justify-content:space-between;gap:15px;align-items:center;margin-top:16px;font-size:11px;color:#7b8a80}
-.caption-settings label{width:185px}
+.caption-settings label{width:min(360px,65%)}
+.caption-settings label small{display:block;margin-top:4px;line-height:1.4}
 .caption-settings select{margin-top:5px}
 @media(max-width:850px){.caption-block-row{grid-template-columns:20px 1fr 75px 75px}}
 .support-hint{font-size:11px;color:#60776d;margin:5px 0 10px}
