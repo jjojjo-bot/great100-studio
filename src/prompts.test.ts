@@ -4,6 +4,18 @@ import { composeScenePrompt, composeThumbnailPrompt } from "./prompts";
 import { SAMPLE_WORK_TEXT } from "./sample";
 
 describe("copy-ready scene prompt", () => {
+  it("puts the APP_DATA shot framing before the image content for generation and copying", () => {
+    const project = createProjectDraft(2, "이순신", "장군 · 지도자", SAMPLE_WORK_TEXT);
+    project.schema_version = "2.1";
+    project.scenes[0].prompt = "세종의 어깨 뒤에서 빈 종이를 바라보는 장면";
+    project.scenes[0].shot_type = "over_the_shoulder";
+    const prompt = composeScenePrompt(project, project.scenes[0]);
+    expect(prompt).toMatch(/^최우선 카메라 구도 \(over_the_shoulder\): 대상의 어깨 뒤에서/);
+    expect(prompt.indexOf("최우선 카메라 구도")).toBeLessThan(prompt.indexOf(project.scenes[0].prompt));
+    project.scenes[0].shot_type = "extreme_wide";
+    expect(composeScenePrompt(project, project.scenes[0])).toContain("넓은 풍경이 화면의 대부분");
+  });
+
   it("always combines scene content, character appearance and the default style", () => {
     const project = createProjectDraft(2, "이순신", "장군 · 지도자", SAMPLE_WORK_TEXT);
     project.style_guide = "피와 시신 없음, 조선시대 복식 존중";
