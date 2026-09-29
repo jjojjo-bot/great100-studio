@@ -94,6 +94,17 @@ describe("APP_DATA v2", () => {
     expect(validateAppData(data).errors).toContain("scene_03의 captions가 narration 내용을 충분히 포함하지 않습니다.");
   });
 
+  it("keeps image framing separate from a Korean zoom instruction", () => {
+    const data = fixture();
+    data.schema_version = "2.1";
+    data.scenes.forEach((scene) => { scene.captions = [{ text: scene.narration, start_sec: scene.start_sec, end_sec: scene.end_sec }]; });
+    data.scenes[0].shot_type = "closeup";
+    data.scenes[0].motion = "손에서 종이 쪽으로 천천히 확대";
+    const project = createV2ProjectDraft(1, "사상 · 교육", JSON.stringify(data), data, validateAppData(data));
+    expect(project.scenes[0].shot_type).toBe("closeup");
+    expect(project.scenes[0].motion).toBe("zoom-in");
+  });
+
   it("warns on long caption blocks and rejects missing scene IDs", () => {
     const data = fixture();
     data.schema_version = "2.1";

@@ -170,6 +170,8 @@ const imageMotion = (value: string): ImageMotion => {
   if (["zoom-in", "zoom-out", "pan-left", "pan-right", "pan-up", "pan-down", "none", "auto"].includes(key)) return key as ImageMotion;
   if (/줌인/.test(value)) return "zoom-in";
   if (/줌아웃/.test(value)) return "zoom-out";
+  if (/확대/.test(value)) return "zoom-in";
+  if (/축소/.test(value)) return "zoom-out";
   if (/왼쪽/.test(value)) return "pan-left";
   if (/오른쪽/.test(value)) return "pan-right";
   return "auto";
