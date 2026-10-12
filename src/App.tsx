@@ -34,6 +34,7 @@ import { SceneTimingPanel } from "./SceneTimingPanel";
 import { FullVideoPreview } from "./FullVideoPreview";
 import { ScenePreviewPane } from "./SceneTimeline";
 import { SAMPLE_WORK_TEXT } from "./sample";
+import { PersonPicker } from "./PersonPicker";
 import type { ImageCandidate, ImageMotion, ProjectData, Scene, VisualAsset } from "./types";
 
 const STEPS = ["대시보드", "프로젝트", "파싱 확인", "사전 점검", "기준 이미지", "Scene 검토", "썸네일", "전체 검토", "완료"];
@@ -68,6 +69,10 @@ function App() {
       else {
         const { data, report } = parseAppData(source);
         if (report.errors.length) { setSetupErrors(report.errors); return; }
+        if (person.trim() && person.replace(/\s/g, "") !== data.person.name.replace(/\s/g, "")) {
+          setSetupErrors([`선택·입력한 인물은 '${person.trim()}'이고 APP_DATA의 인물은 '${data.person.name}'입니다. 같은 인물명으로 맞춰 주세요.`]);
+          return;
+        }
         draft = createV2ProjectDraft(episode, category, source, data, report);
       }
       setSetupErrors([]);
@@ -227,8 +232,8 @@ function ProjectSetup(props: SetupProps) {
     <div className="panel form-panel">
       <div className="form-grid">
         <label><span>회차</span><input type="number" min="1" value={props.episode} onChange={(e) => props.setEpisode(Number(e.target.value))} /></label>
-        <label><span>인물명</span><input placeholder="예: 이순신" value={props.person} onChange={(e) => props.setPerson(e.target.value)} /></label>
-        <label><span>분야</span><select value={props.category} onChange={(e) => props.setCategory(e.target.value)}><option>장군 · 지도자</option><option>독립운동가</option><option>과학 · 발명</option><option>예술 · 문화</option><option>사상 · 교육</option></select></label>
+        <PersonPicker person={props.person} onPerson={props.setPerson} onCategory={props.setCategory} />
+        <label><span>분야</span><select value={props.category} onChange={(e) => props.setCategory(e.target.value)}><option>장군 · 지도자</option><option>독립운동가</option><option>과학 · 발명</option><option>예술 · 문화</option><option>사상 · 교육</option><option>스포츠</option><option>기업 · 산업 · 경제</option></select></label>
       </div>
       <div className="source-head"><div><strong>{props.legacyImport ? "Legacy Markdown 제작안" : "APP_DATA JSON 붙여넣기"}</strong><small>{props.legacyImport ? "기존 자유형 제작안을 추정하여 읽습니다." : "순수 JSON 또는 ## APP_DATA가 포함된 Work 결과를 붙여넣으세요."}</small></div><button className="text-button" onClick={() => { props.setLegacyImport(!props.legacyImport); props.setSource(""); }}>{props.legacyImport ? "APP_DATA JSON 입력으로 전환" : "Legacy Import"}</button></div>
       {props.legacyImport && <button className="text-button" onClick={props.onSample}>이순신 예시 불러오기</button>}
