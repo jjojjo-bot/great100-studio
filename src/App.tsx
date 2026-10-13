@@ -26,7 +26,7 @@ import {
 import { createProjectDraft, DEFAULT_STYLE, parseWorkText } from "./parser";
 import { completionErrors, createV2ProjectDraft, parseAppData, reportForProject } from "./app-data";
 import { composeScenePrompt, composeThumbnailPrompt } from "./prompts";
-import { createProjectOnDisk, deleteCandidateAsset, deleteProject, downloadBlob, exportProjectZip, generateImages, getAccessCode, getBackgroundMusic, getRenderedVideo, importImageCandidates, importSceneVideo, isTauri, listProjects, removeBackgroundMusic, removeSceneNarration, saveBackgroundMusic, saveProject, saveRenderedVideo, setAccessCode } from "./platform";
+import { createNumberedProject, getNextProjectEpisode, deleteCandidateAsset, deleteProject, downloadBlob, exportProjectZip, generateImages, getAccessCode, getBackgroundMusic, getRenderedVideo, importImageCandidates, importSceneVideo, isTauri, listProjects, removeBackgroundMusic, removeSceneNarration, saveBackgroundMusic, saveProject, saveRenderedVideo, setAccessCode } from "./platform";
 import { findCandidate, withoutAssetCandidate, withoutSceneCandidate } from "./candidates";
 import { buildVideoPlan, renderProjectMp4, resolveVideoIntroImage, sceneMusicVolume } from "./video";
 import { SceneNarrationPanel } from "./SceneNarrationPanel";
@@ -67,6 +67,15 @@ function App() {
     listProjects().then(setProjects).catch((error) => setNotice(`프로젝트 목록을 읽지 못했습니다: ${String(error)}`));
   }, []);
 
+  useEffect(() => {
+    if (step === 1) {
+      let active = true;
+      getNextProjectEpisode().then((next) => { if (active) setEpisode(next); })
+        .catch((error) => { if (active) setNotice(`회차를 확인하지 못했습니다: ${String(error)}`); });
+      return () => { active = false; };
+    }
+  }, [step]);
+
   const progress = useMemo(() => Math.round((step / (STEPS.length - 1)) * 100), [step]);
 
   const prepareProject = async () => {
@@ -85,8 +94,7 @@ function App() {
         draft = createV2ProjectDraft(episode, category, source, data, report);
       }
       setSetupErrors([]);
-      const path = await createProjectOnDisk(draft);
-      draft.project_path = path;
+      draft = await createNumberedProject(draft);
       await saveProject(draft);
       setProject(draft);
       setProjects((items) => [draft, ...items]);
@@ -184,8 +192,8 @@ function App() {
           {step === 0 && <Dashboard onStart={() => { setProject(null); setStep(1); }} projects={projects} accessCode={accessCode} onAccessCode={(code) => { updateAccessCode(code); setAccessCode(code); }} onOpen={(item) => { setProject(item); setStep(2); }} onDownload={download} onDelete={removeProject} deletingId={deletingId} />}
           {step === 1 && (
             <ProjectSetup episode={episode} person={person} category={category} source={source} busy={busy} legacyImport={legacyImport} setLegacyImport={setLegacyImport} errors={setupErrors}
-              setEpisode={setEpisode} setPerson={setPerson} setCategory={setCategory} setSource={setSource}
-              onSample={() => { setSource(SAMPLE_WORK_TEXT); setPerson("이순신"); setEpisode(2); }} onBack={() => setStep(0)} onContinue={prepareProject} />
+              setPerson={setPerson} setCategory={setCategory} setSource={setSource}
+              onSample={() => { setSource(SAMPLE_WORK_TEXT); setPerson("이순신"); }} onBack={() => setStep(0)} onContinue={prepareProject} />
           )}
           {step === 2 && project && <ParseReview project={project} onChange={persist} onReparse={reparseSource} onError={setNotice} />}
           {step === 3 && project && <Preflight project={project} />}
@@ -231,7 +239,7 @@ function Dashboard({ onStart, projects, accessCode, onAccessCode, onOpen, onDown
 interface SetupProps {
   episode: number; person: string; category: string; source: string; busy: boolean;
   legacyImport: boolean; setLegacyImport: (value: boolean) => void; errors: string[];
-  setEpisode: (value: number) => void; setPerson: (value: string) => void; setCategory: (value: string) => void; setSource: (value: string) => void;
+  setPerson: (value: string) => void; setCategory: (value: string) => void; setSource: (value: string) => void;
   onSample: () => void; onBack: () => void; onContinue: () => void;
 }
 
@@ -241,7 +249,7 @@ function ProjectSetup(props: SetupProps) {
     <PageHeading eyebrow="NEW PROJECT" title="새 이야기를 시작합니다" text="기본 정보와 ChatGPT Work에서 만든 제작안을 입력해 주세요." />
     <div className="panel form-panel">
       <div className="form-grid">
-        <label><span>회차</span><input type="number" min="1" value={props.episode} onChange={(e) => props.setEpisode(Number(e.target.value))} /></label>
+        <label><span>회차 · 자동 부여</span><input aria-label="자동 회차" type="number" readOnly value={props.episode} /><small>프로젝트 생성 시 확정됩니다.</small></label>
         <PersonPicker person={props.person} onPerson={props.setPerson} onCategory={props.setCategory} />
         <label><span>분야</span><select value={props.category} onChange={(e) => props.setCategory(e.target.value)}><option>장군 · 지도자</option><option>독립운동가</option><option>과학 · 발명</option><option>예술 · 문화</option><option>사상 · 교육</option><option>스포츠</option><option>기업 · 산업 · 경제</option></select></label>
       </div>

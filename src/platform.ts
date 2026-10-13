@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { openDB } from "idb";
+import { openDB, type IDBPDatabase } from "idb";
 import JSZip from "jszip";
 import { MAX_MUSIC_BYTES, MAX_MUSIC_SECONDS } from "./music-limits";
 import { composeScenePrompt, composeThumbnailPrompt, withFullImagePrompts } from "./prompts";
@@ -9,13 +9,24 @@ import type { BackgroundMusic, GenerateRequest, ImageCandidate, ProjectData, Sce
 export const isTauri = () => "__TAURI_INTERNALS__" in window;
 const VIDEO_RENDER_VERSION = 8;
 
-const database = () => openDB("great100-studio", 4, {
-  upgrade(db) {
-    if (!db.objectStoreNames.contains("projects")) db.createObjectStore("projects", { keyPath: "id" });
-    if (!db.objectStoreNames.contains("videos")) db.createObjectStore("videos", { keyPath: "id" });
-    if (!db.objectStoreNames.contains("audio")) db.createObjectStore("audio", { keyPath: "id" });
-    if (!db.objectStoreNames.contains("media")) db.createObjectStore("media", { keyPath: "id" });
-  },
+const database = () => new Promise<IDBPDatabase>((resolve, reject) => {
+  let blocked = false;
+  openDB("great100-studio", 5, {
+    blocked() {
+      blocked = true;
+      reject(new Error("저장소 업데이트를 위해 Great100의 다른 탭을 닫거나 새로고침한 뒤 다시 시도해 주세요."));
+    },
+    blocking(_currentVersion, _blockedVersion, event) {
+      (event.target as IDBDatabase).close();
+    },
+    upgrade(db) {
+      if (!db.objectStoreNames.contains("projects")) db.createObjectStore("projects", { keyPath: "id" });
+      if (!db.objectStoreNames.contains("videos")) db.createObjectStore("videos", { keyPath: "id" });
+      if (!db.objectStoreNames.contains("audio")) db.createObjectStore("audio", { keyPath: "id" });
+      if (!db.objectStoreNames.contains("media")) db.createObjectStore("media", { keyPath: "id" });
+      if (!db.objectStoreNames.contains("settings")) db.createObjectStore("settings");
+    },
+  }).then((db) => { if (blocked) db.close(); else resolve(db); }, reject);
 });
 
 function mockPreview(label: string, index: number) {
@@ -46,6 +57,41 @@ export async function createProjectOnDisk(project: ProjectData): Promise<string>
   const db = await database();
   await db.put("projects", { ...project, project_path: path });
   return path;
+}
+
+function nextEpisode(projects: ProjectData[], last: unknown): number {
+  const episodes = projects.map((project) => project.episode).concat(typeof last === "number" ? last : 0);
+  return Math.max(0, ...episodes.filter((episode) => Number.isSafeInteger(episode) && episode > 0)) + 1;
+}
+
+export async function getNextProjectEpisode(): Promise<number> {
+  const desktop = isTauri();
+  const diskProjects = desktop ? await listProjects() : [];
+  const db = await database();
+  const tx = db.transaction(["projects", "settings"], "readonly");
+  const projects = desktop ? diskProjects : await tx.objectStore("projects").getAll() as ProjectData[];
+  const last = await tx.objectStore("settings").get("last-episode");
+  await tx.done;
+  return nextEpisode(projects, last);
+}
+
+export async function createNumberedProject(draft: ProjectData): Promise<ProjectData> {
+  const desktop = isTauri();
+  const diskProjects = desktop ? await listProjects() : [];
+  const db = await database();
+  // The read and reservation share one transaction, including across browser tabs.
+  const tx = db.transaction(["projects", "settings"], "readwrite");
+  const store = tx.objectStore("projects");
+  const projects = desktop ? diskProjects : await store.getAll() as ProjectData[];
+  const last = await tx.objectStore("settings").get("last-episode");
+  const episode = nextEpisode(projects, last);
+  const folder_name = `${String(episode).padStart(3, "0")}_${draft.person.replace(/[\\/:*?"<>|]/g, "_")}`;
+  const project = withFullImagePrompts({ ...draft, episode, folder_name, project_path: `projects/${folder_name}` });
+  if (!desktop) await store.add(project);
+  await tx.objectStore("settings").put(episode, "last-episode");
+  await tx.done;
+  if (desktop) project.project_path = await createProjectOnDisk(project);
+  return project;
 }
 
 export async function saveProject(project: ProjectData): Promise<void> {

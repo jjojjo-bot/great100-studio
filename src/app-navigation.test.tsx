@@ -5,7 +5,7 @@ import App from "./App";
 
 vi.mock("./platform", async (importOriginal) => {
   const original = await importOriginal<typeof import("./platform")>();
-  return { ...original, listProjects: async () => [], isTauri: () => false, getAccessCode: () => "" };
+  return { ...original, listProjects: async () => [], getNextProjectEpisode: async () => 1, isTauri: () => false, getAccessCode: () => "" };
 });
 
 afterEach(cleanup);
@@ -13,6 +13,7 @@ afterEach(cleanup);
 it("returns to the dashboard before project creation and retains the setup draft", async () => {
   render(<App />);
   fireEvent.click(screen.getByRole("button", { name: "새 인물 프로젝트" }));
+  expect((screen.getByLabelText("자동 회차") as HTMLInputElement).readOnly).toBe(true);
   fireEvent.change(screen.getByLabelText("인물명 직접 입력"), { target: { value: "세종대왕" } });
   fireEvent.change(document.querySelector(".source-input")!, { target: { value: "작성 중인 제작안" } });
   fireEvent.click(screen.getByRole("button", { name: /대시보드$/ }));
