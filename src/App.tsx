@@ -35,6 +35,7 @@ import { FullVideoPreview } from "./FullVideoPreview";
 import { ScenePreviewPane } from "./SceneTimeline";
 import { SAMPLE_WORK_TEXT } from "./sample";
 import { PersonPicker } from "./PersonPicker";
+import { useStepHistory } from "./useStepHistory";
 import type { ImageCandidate, ImageMotion, ProjectData, Scene, VisualAsset } from "./types";
 
 const STEPS = ["대시보드", "프로젝트", "파싱 확인", "사전 점검", "기준 이미지", "Scene 검토", "썸네일", "전체 검토", "완료"];
@@ -53,6 +54,14 @@ function App() {
   const [deletingId, setDeletingId] = useState("");
   const [projects, setProjects] = useState<ProjectData[]>([]);
   const [accessCode, updateAccessCode] = useState(getAccessCode);
+
+  useStepHistory(step, project?.id, (location) => {
+    const saved = location.projectId
+      ? projects.find((item) => item.id === location.projectId) || (project?.id === location.projectId ? project : null)
+      : null;
+    setProject(saved);
+    setStep(location.step > 1 && !saved ? 0 : location.step);
+  });
 
   useEffect(() => {
     listProjects().then(setProjects).catch((error) => setNotice(`프로젝트 목록을 읽지 못했습니다: ${String(error)}`));
@@ -153,7 +162,7 @@ function App() {
         </div>
         <nav className="steps" aria-label="제작 단계">
           {STEPS.map((label, index) => (
-            <button key={label} className={`step ${index === step ? "active" : ""} ${index < step ? "done" : ""}`} onClick={() => project && index <= step && setStep(index)} disabled={!project && index > 1}>
+            <button key={label} className={`step ${index === step ? "active" : ""} ${index < step ? "done" : ""}`} onClick={() => (index <= 1 || (project && index <= step)) && setStep(index)} disabled={!project && index > 1}>
               <span>{index < step ? <Check size={14} /> : index + 1}</span>{label}
             </button>
           ))}
@@ -172,11 +181,11 @@ function App() {
 
         <section className={`workspace${step === 5 ? " scene-workspace-root" : ""}`}>
           {notice && <div className="toast" onClick={() => setNotice("")}>{notice}</div>}
-          {step === 0 && <Dashboard onStart={() => setStep(1)} projects={projects} accessCode={accessCode} onAccessCode={(code) => { updateAccessCode(code); setAccessCode(code); }} onOpen={(item) => { setProject(item); setStep(2); }} onDownload={download} onDelete={removeProject} deletingId={deletingId} />}
+          {step === 0 && <Dashboard onStart={() => { setProject(null); setStep(1); }} projects={projects} accessCode={accessCode} onAccessCode={(code) => { updateAccessCode(code); setAccessCode(code); }} onOpen={(item) => { setProject(item); setStep(2); }} onDownload={download} onDelete={removeProject} deletingId={deletingId} />}
           {step === 1 && (
             <ProjectSetup episode={episode} person={person} category={category} source={source} busy={busy} legacyImport={legacyImport} setLegacyImport={setLegacyImport} errors={setupErrors}
               setEpisode={setEpisode} setPerson={setPerson} setCategory={setCategory} setSource={setSource}
-              onSample={() => { setSource(SAMPLE_WORK_TEXT); setPerson("이순신"); setEpisode(2); }} onContinue={prepareProject} />
+              onSample={() => { setSource(SAMPLE_WORK_TEXT); setPerson("이순신"); setEpisode(2); }} onBack={() => setStep(0)} onContinue={prepareProject} />
           )}
           {step === 2 && project && <ParseReview project={project} onChange={persist} onReparse={reparseSource} onError={setNotice} />}
           {step === 3 && project && <Preflight project={project} />}
@@ -223,11 +232,12 @@ interface SetupProps {
   episode: number; person: string; category: string; source: string; busy: boolean;
   legacyImport: boolean; setLegacyImport: (value: boolean) => void; errors: string[];
   setEpisode: (value: number) => void; setPerson: (value: string) => void; setCategory: (value: string) => void; setSource: (value: string) => void;
-  onSample: () => void; onContinue: () => void;
+  onSample: () => void; onBack: () => void; onContinue: () => void;
 }
 
 function ProjectSetup(props: SetupProps) {
   return <div className="page narrow">
+    <button className="btn ghost" style={{ marginBottom: 16 }} onClick={props.onBack}><ArrowLeft size={17} /> 대시보드로 돌아가기</button>
     <PageHeading eyebrow="NEW PROJECT" title="새 이야기를 시작합니다" text="기본 정보와 ChatGPT Work에서 만든 제작안을 입력해 주세요." />
     <div className="panel form-panel">
       <div className="form-grid">
