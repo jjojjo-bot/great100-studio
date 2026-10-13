@@ -165,7 +165,7 @@ function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark"><span>百</span></div>
+          <div className="brand-mark" aria-hidden="true"><span>G</span></div>
           <div><strong>Great100</strong><small>STORY STUDIO</small></div>
         </div>
         <nav className="steps" aria-label="제작 단계">
@@ -224,11 +224,19 @@ function Dashboard({ onStart, projects, accessCode, onAccessCode, onOpen, onDown
       <p>Work 제작안을 붙여넣으면 장면 이미지·동영상과 자막을 준비하고<br />직접 녹음한 내레이션과 배경음악을 더한 MP4까지 만들 수 있어요.</p>
       <button className="btn primary large" onClick={onStart}><Plus size={19} /> 새 인물 프로젝트</button>
     </div>
-    <div className="hero-art" aria-label="Great100 Studio illustration">
-      <div className="sun" /><div className="mountain m1" /><div className="mountain m2" />
-      <div className="portrait"><div className="hat" /><div className="head" /><div className="body" /></div>
-      <div className="ship">⚓</div>
-      <div className="hero-card"><span>002</span><strong>다음 이야기를<br />준비해 볼까요?</strong><small>NEW PROJECT</small></div>
+    <div className="hero-art" role="img" aria-label="100인의 이야기를 담은 현대적인 책 표지 디자인">
+      <div className="collection-label"><span>THE GREAT100 COLLECTION</span><span>01 — 100</span></div>
+      <div className="cover-stack" aria-hidden="true">
+        <div className="cover-sheet cover-sheet-back" />
+        <div className="cover-sheet cover-sheet-accent" />
+        <div className="cover-sheet cover-sheet-main">
+          <div className="cover-heading"><span>한국을 빛낸 100인</span><span className="cover-dot" /></div>
+          <div className="cover-number">100<span>STORIES</span></div>
+          <div className="cover-message">삶을 읽고,<br />이야기를 남기다.</div>
+          <div className="cover-bottom"><span>GREAT100<br />STORY STUDIO</span><div className="cover-lines"><i /><i /><i /></div></div>
+        </div>
+      </div>
+      <div className="collection-footer"><span>A LIFE. A STORY.</span><span>100인의 삶을 담다</span></div>
     </div>
   </div>
   {!isTauri() && <div className="access-panel"><KeyRound size={18} /><div><strong>실제 이미지 생성 접근 코드</strong><small>배포 관리자에게 받은 코드를 입력하면 OpenAI 이미지 생성이 활성화됩니다. 비워두면 mock mode로 작동합니다.</small></div><input type="password" aria-label="이미지 생성 접근 코드" placeholder="접근 코드 입력" value={accessCode} onChange={(event) => onAccessCode(event.target.value)} /></div>}
