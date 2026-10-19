@@ -4,6 +4,7 @@ import type { Session, SupabaseClient } from "@supabase/supabase-js";
 import { isTauri } from "./platform";
 import { authRedirectUrl, clearAuthRedirect, getAuthClient } from "./supabase";
 import { setCloudSession } from "./cloud-session";
+import { startVisitTracking } from "./visit-analytics";
 import "./auth.css";
 
 interface AuthState {
@@ -38,6 +39,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(!!client);
   const [signingIn, setSigningIn] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!client || !session) return;
+    return startVisitTracking(client, session);
+  }, [client, session?.access_token, session?.user.id]);
 
   useEffect(() => {
     if (!client) return;

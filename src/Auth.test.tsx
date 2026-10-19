@@ -17,6 +17,7 @@ const session: Session = {
 function authClient(saved: Session | null = null) {
   let listener: (event: AuthChangeEvent, nextSession: Session | null) => void = () => {};
   const unsubscribe = vi.fn();
+  const rpc = vi.fn(() => ({ abortSignal: async () => ({ error: null }) }));
   const auth = {
     initialize: vi.fn(async () => ({ error: null as unknown })),
     getSession: vi.fn(async () => ({ data: { session: saved }, error: null as unknown })),
@@ -24,7 +25,7 @@ function authClient(saved: Session | null = null) {
     signInWithOAuth: vi.fn(async () => ({ data: {}, error: null as unknown })),
     signOut: vi.fn(async () => { listener("SIGNED_OUT", null); return { error: null as unknown }; }),
   };
-  return { client: { auth } as unknown as SupabaseClient, auth, unsubscribe, emit: (event: AuthChangeEvent, nextSession: Session | null) => listener(event, nextSession) };
+  return { client: { auth, rpc } as unknown as SupabaseClient, auth, rpc, unsubscribe, emit: (event: AuthChangeEvent, nextSession: Session | null) => listener(event, nextSession) };
 }
 
 const studio = () => <AuthGate><div>영상 작업 화면</div><AccountMenu /></AuthGate>;
@@ -38,7 +39,7 @@ afterEach(() => { cleanup(); vi.unstubAllEnvs(); });
 
 describe("Google login", () => {
   it("does not mount the studio or read projects before authentication", async () => {
-    const { client } = authClient();
+    const { client, rpc } = authClient();
     setup.getAuthClient.mockReturnValue(client);
     const readProjects = vi.fn();
     function ProtectedStudio() { useEffect(readProjects, []); return <div>영상 작업 화면</div>; }
@@ -46,6 +47,7 @@ describe("Google login", () => {
     expect(screen.getByRole("status").textContent).toContain("로그인 정보를 확인");
     await screen.findByRole("button", { name: "Google로 계속하기" });
     expect(readProjects).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalled();
     expect(screen.queryByText("영상 작업 화면")).toBeNull();
   });
 
@@ -74,11 +76,12 @@ describe("Google login", () => {
   });
 
   it("restores a saved session, and signs out only this browser", async () => {
-    const { client, auth } = authClient(session);
+    const { client, auth, rpc } = authClient(session);
     setup.getAuthClient.mockReturnValue(client);
     render(studio());
     expect(await screen.findByText("creator@example.com")).toBeTruthy();
     expect(screen.getByText("영상 작업 화면")).toBeTruthy();
+    await waitFor(() => expect(rpc).toHaveBeenCalledWith("great100_record_visit"));
     fireEvent.click(screen.getByRole("button", { name: "로그아웃" }));
     await screen.findByRole("button", { name: "Google로 계속하기" });
     expect(auth.signOut).toHaveBeenCalledWith({ scope: "local" });

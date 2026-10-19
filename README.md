@@ -121,6 +121,33 @@ Vercel의 **Settings → Environment Variables**에 다음 값을 추가합니�
 
 연동 기준: [R2 시작하기](https://developers.cloudflare.com/r2/get-started/), [R2 토큰](https://developers.cloudflare.com/r2/api/tokens/), [R2 CORS](https://developers.cloudflare.com/r2/buckets/cors/), [R2 임시 URL](https://developers.cloudflare.com/r2/api/s3/presigned-urls/), [Supabase RLS](https://supabase.com/docs/guides/database/postgres/row-level-security).
 
+## 로그인 기록과 일별 방문 통계
+
+Supabase **SQL Editor → New query**에서 [`supabase/migrations/202610190002_visit_analytics.sql`](supabase/migrations/202610190002_visit_analytics.sql) 전체 내용을 실행합니다. 기존 DB 설치 SQL과 별도로 한 번 실행하며, 다시 실행해도 기록은 유지됩니다. 앱 코드 배포 후 로그인한 사용자의 방문을 자동 기록합니다. 추가 환경변수나 별도 분석 서비스는 필요하지 않습니다.
+
+| 저장 대상 | 내용 |
+| --- | --- |
+| `great100_daily_visits` | 계정당 한국 날짜 기준 하루 한 행, 첫·최근 방문 기록 시각 |
+| `great100_login_history` | 로그인 세션당 한 행, 실제 로그인 시각과 앱이 처음 기록한 시각 |
+| `great100_daily_stats` | 날짜별 방문자 수, 로그인 횟수, 로그인한 사용자 수를 모은 관리자용 뷰 |
+
+**방문자 수**는 그날 로그인한 상태로 앱을 연 계정 수입니다. 같은 계정의 새로고침·여러 탭·다른 PC 접속은 하루 한 명으로 집계합니다. 로그인 유지 상태로 다음 날 다시 방문하거나, 화면을 켜 둔 채 한국 시간 자정을 넘기면 그날 방문도 기록합니다. 백그라운드 탭은 화면으로 돌아왔을 때 기록합니다. 로그인 세션이 새로 생길 때만 로그인 횟수가 늘어나므로 토큰 갱신이나 탭 전환은 로그인 횟수에 포함하지 않습니다.
+
+전체 방문 통계는 Supabase SQL Editor의 기본 `postgres` 역할로 확인합니다.
+
+```sql
+select * from public.great100_daily_stats
+order by visit_date desc;
+```
+
+[`supabase/queries/visit_analytics.sql`](supabase/queries/visit_analytics.sql)에는 **최근 30일 통계(방문 0명인 날 포함)**, **이메일별 최근 로그인**, **오늘 방문한 사용자 목록**을 조회하는 SQL이 있습니다. 첫 번째 결과의 `방문자 수`를 하루 이용자 수로 보세요. `로그인 횟수`는 같은 사람이 다시 로그인하면 늘어날 수 있습니다.
+
+집계는 설치·배포 이후부터 시작하며 로그인하지 않고 로그인 화면만 본 방문자는 포함하지 않습니다. 기존 로그인 유지 세션을 처음 기록할 때는 그 세션의 원래 로그인 시각을 함께 남기지만, 과거 전체 로그인·방문 기록을 복원하지는 않습니다. 첫·최근 방문 기록은 앱이 보고한 시각이며 실시간 접속 상태나 체류 시간이 아닙니다.
+
+사용자 ID와 세션 ID, 시각만 저장하고 IP·기기 정보·인증 토큰은 저장하지 않습니다. 일반 사용자는 자기 기록만 읽을 수 있고, 직접 기록을 추가·수정·삭제하거나 전체 통계를 조회할 수 없습니다. 기록 시각과 사용자 ID는 DB가 정하며, 기록 요청이 실패해도 로그인이나 작업 저장은 계속 사용할 수 있습니다.
+
+연동 기준: [Supabase 사용자 세션](https://supabase.com/docs/guides/auth/sessions), [인증 이벤트](https://supabase.com/docs/reference/javascript/auth-onauthstatechange), [RLS와 뷰 접근](https://supabase.com/docs/guides/database/postgres/row-level-security).
+
 ## 영상 제작과 저장
 
 웹앱에서 접근 코드를 비워두면 mock 이미지로 전체 흐름을 사용할 수 있습니다. 로그인한 웹앱은 계정 저장소를 사용하고, 인증을 설정하지 않은 개발 환경은 브라우저의 IndexedDB를 사용합니다. 장면별 자막과 표시 시간을 수정하고 모든 장면의 이미지 또는 동영상을 선택한 뒤 완료 단계에서 **MP4 만들기**를 누르세요. 브라우저가 1280×720 H.264 MP4를 직접 만들며, 장면별 내레이션과 배경음악을 추가할 수도 있습니다. 최신 Chrome/Edge에서 사용하세요.
