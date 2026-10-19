@@ -3,6 +3,12 @@ import { afterEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import App from "./App";
 
+// Navigation tests exercise local editing independently of developer OAuth credentials.
+vi.mock("./supabase", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./supabase")>();
+  return { ...original, getAuthClient: () => null };
+});
+
 vi.mock("./platform", async (importOriginal) => {
   const original = await importOriginal<typeof import("./platform")>();
   return { ...original, listProjects: async () => [], getNextProjectEpisode: async () => 1, isTauri: () => false, getAccessCode: () => "" };

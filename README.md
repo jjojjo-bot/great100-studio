@@ -4,10 +4,76 @@
 
 ## 로컬 웹 실행
 
+Node.js 22 이상을 사용합니다.
+
 ```bash
 npm install
 npm run dev
 ```
+
+## Google 로그인 설정
+
+웹앱 로그인은 Supabase Auth의 Google 로그인을 사용합니다. 로그인 상태는 브라우저에 유지되고, 세션 갱신과 다른 탭의 로그아웃이 화면에 반영됩니다. 로그아웃은 현재 브라우저에만 적용되므로 다른 PC의 로그인은 유지됩니다.
+
+이번 단계는 **로그인 연결까지**입니다. 프로젝트·이미지·동영상·녹음은 기존 IndexedDB에 저장되며, 아직 계정별로 분리되거나 다른 PC와 동기화되지 않습니다. DB/Storage 연결과 기존 작업 이전은 다음 단계입니다. 데스크톱 앱은 기존 로컬 작업 모드를 사용합니다.
+
+### 1. Supabase 프로젝트 만들기
+
+1. [Supabase Dashboard](https://supabase.com/dashboard)에서 새 프로젝트를 만듭니다.
+2. 프로젝트의 연결 정보에서 **Project URL**과 **publishable key**를 확인합니다. `sb_publishable_`로 시작하는 공개 키이며, 브라우저에서 사용해도 되는 값입니다.
+3. 저장소 루트의 `.env.example`을 `.env.local`로 복사하고 다음 두 값을 입력합니다.
+
+```dotenv
+VITE_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_YOUR_PUBLIC_KEY
+```
+
+`secret` 또는 `service_role` 키와 DB 비밀번호는 이 파일에 넣지 마세요. `.env.local`은 Git에서 제외됩니다. 환경변수를 바꿨으면 개발 서버를 다시 시작합니다.
+
+### 2. Google 로그인 제공자 설정
+
+1. Supabase의 **Authentication → Sign In / Providers → Google**에서 Google 로그인을 활성화하고 표시된 **Callback URL**을 복사합니다. 보통 `https://YOUR_PROJECT_REF.supabase.co/auth/v1/callback`입니다.
+2. [Google Auth Platform](https://console.cloud.google.com/auth/overview)에서 프로젝트를 선택하거나 새로 만들고 앱 이름·지원 이메일·대상을 설정합니다. 테스트 상태로 사용할 경우 로그인할 Google 계정을 테스트 사용자에 추가합니다.
+3. **Clients**에서 **Web application** 유형의 OAuth 클라이언트를 만듭니다.
+4. **Authorized JavaScript origins**에 운영 주소 `https://great100-studio.vercel.app`을 추가합니다. 로컬 개발용으로 `http://localhost:1420`과 `http://127.0.0.1:1420`도 추가할 수 있습니다. 이 항목은 경로나 끝의 `/`가 없는 출처 주소입니다.
+5. **Authorized redirect URIs**에 1번에서 복사한 **Supabase Callback URL**을 등록합니다. 이 항목에는 웹앱 주소가 아닌 Supabase 콜백 주소가 들어갑니다.
+6. 발급받은 Google **Client ID**와 **Client Secret**을 Supabase의 Google 제공자 설정에 입력하고 저장합니다. Client Secret은 프런트엔드 환경변수에 넣지 않습니다.
+7. Google의 기본 사용자 정보 권한인 `openid`, `userinfo.email`, `userinfo.profile`을 사용합니다. 드라이브 등 추가 권한은 필요하지 않습니다.
+
+### 3. 앱으로 돌아올 주소 설정
+
+Supabase의 **Authentication → URL Configuration**에서 다음을 설정합니다.
+
+| 항목 | 등록할 주소 |
+| --- | --- |
+| Site URL | `https://great100-studio.vercel.app/` |
+| Redirect URLs · 운영 | `https://great100-studio.vercel.app/` |
+| Redirect URLs · 로컬 개발 | `http://localhost:1420/`, `http://127.0.0.1:1420/` |
+
+이 앱은 로그인 후 루트 주소(`/`)로 돌아와 SDK가 PKCE 인증 코드를 세션으로 교환합니다. 별도 `/auth/callback` 페이지는 필요하지 않습니다. 위의 **Supabase Callback URL**과 **웹앱으로 돌아올 주소**는 서로 다른 설정입니다.
+
+로그인 후 돌아올 주소는 현재 접속한 출처와 앱의 기본 경로에서 계산합니다. 운영 사이트에서 시작한 로그인은 `https://great100-studio.vercel.app/`로, 로컬에서 시작한 로그인은 해당 로컬 주소로 돌아옵니다.
+
+Vercel 프로젝트의 **Settings → Environment Variables**에 다음 두 값을 `.env.local`과 동일하게 등록합니다. 운영 배포에 적용되도록 **Production** 환경을 포함합니다.
+
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_PUBLISHABLE_KEY`
+
+등록 후 로그인 코드가 포함된 버전을 새로 빌드·배포합니다. Vite는 빌드 시 환경변수를 반영하므로 Vercel에 값만 저장한 상태에서는 기존 배포가 바뀌지 않습니다. `.env.local`은 Git에서 제외되며 Vercel 환경변수는 별도로 등록해야 합니다.
+
+개발 환경에서 두 값을 모두 비워두면 기존 로컬 작업을 계속 사용할 수 있습니다. 배포 빌드에서는 설정 누락 시 로그인 설정 안내 화면이 나타납니다. 값이 하나만 있거나 설정이 잘못된 경우에도 로그인 화면을 우회하지 않습니다.
+
+### 4. 실제 로그인 확인
+
+1. 운영 사이트 `https://great100-studio.vercel.app/` 또는 `npm run dev`로 실행한 로컬 사이트에서 **Google로 계속하기**를 누릅니다.
+2. Google 계정을 선택한 뒤 대시보드 상단에 이메일과 **로그아웃** 버튼이 나타나는지 확인합니다.
+3. 새로고침 후 로그인 상태가 유지되는지 확인합니다.
+4. 같은 사이트를 다른 탭에서도 열고 로그아웃이 양쪽 탭에 반영되는지 확인합니다.
+5. 다른 PC에서 같은 계정으로 로그인할 수 있는지 확인합니다. 이 단계에서는 프로젝트와 파일은 아직 동기화되지 않습니다.
+
+연동 기준: [Supabase Google 로그인](https://supabase.com/docs/guides/auth/social-login/auth-google), [Supabase React 인증 가이드](https://supabase.com/docs/guides/auth/quickstarts/react).
+
+## 영상 제작과 로컬 저장
 
 웹앱에서 접근 코드를 비워두면 mock 이미지로 전체 흐름을 사용할 수 있습니다. 프로젝트와 업로드한 파일은 이 브라우저의 IndexedDB에 저장됩니다. 장면별 자막과 표시 시간을 수정하고 모든 장면의 이미지 또는 동영상을 선택한 뒤 완료 단계에서 **MP4 만들기**를 누르세요. 브라우저가 1280×720 H.264 MP4를 직접 만들며, 장면별 내레이션과 배경음악을 추가할 수도 있습니다. 최신 Chrome/Edge에서 사용하세요.
 
@@ -38,7 +104,7 @@ Work 제작안은 `Scene 1`·`장면 1` 형식, 열 이름과 순서가 조금 �
 - `OPENAI_API_KEY`: 서버에서만 읽는 OpenAI API 키
 - `GREAT100_ACCESS_KEY`: 개인 사용을 위한 별도 접근 코드. 웹앱의 입력칸에 이 코드를 입력합니다.
 
-두 값 중 하나라도 없으면 서버의 실제 이미지 생성은 비활성화됩니다. 접근 코드는 OpenAI API 키가 아닙니다. 이 개인 사용 방식은 계정별 분리나 공유 프로젝트를 제공하지 않습니다. 다른 사용자에게 공개하기 전에는 사용자 인증, 사용량 제한, 중앙 저장소가 필요합니다.
+두 값 중 하나라도 없으면 서버의 실제 이미지 생성은 비활성화됩니다. 접근 코드는 OpenAI API 키가 아닙니다. Google 로그인은 위의 Supabase 설정을 사용하며 이 접근 코드와 별개입니다. 현재 프로젝트 저장은 계정별 분리나 공유를 제공하지 않습니다. 여러 사용자에게 공개하기 전에는 사용자별 중앙 저장소와 사용량 제한이 필요합니다.
 
 웹에서 실제 생성 요청을 로컬로 시험하려면 `vercel dev`를 사용합니다. 일반 `npm run dev`는 프런트엔드와 mock mode를 실행합니다.
 

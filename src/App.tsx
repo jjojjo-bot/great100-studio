@@ -36,11 +36,16 @@ import { ScenePreviewPane } from "./SceneTimeline";
 import { SAMPLE_WORK_TEXT } from "./sample";
 import { PersonPicker } from "./PersonPicker";
 import { useStepHistory } from "./useStepHistory";
+import { AccountMenu, AuthGate } from "./Auth";
 import type { ImageCandidate, ImageMotion, ProjectData, Scene, VisualAsset } from "./types";
 
 const STEPS = ["대시보드", "프로젝트", "파싱 확인", "사전 점검", "기준 이미지", "Scene 검토", "썸네일", "전체 검토", "완료"];
 
 function App() {
+  return <AuthGate><Studio /></AuthGate>;
+}
+
+function Studio() {
   const [step, setStep] = useState(0);
   const [episode, setEpisode] = useState(1);
   const [person, setPerson] = useState("");
@@ -184,7 +189,7 @@ function App() {
       <main>
         <header className="topbar">
           <div className="breadcrumb">한국을 빛낸 100인 <b>/</b> {project?.person || "새 프로젝트"}</div>
-          <div className="progress-wrap"><span>{progress}%</span><div><i style={{ width: `${progress}%` }} /></div></div>
+          <div className="topbar-actions"><div className="progress-wrap"><span>{progress}%</span><div><i style={{ width: `${progress}%` }} /></div></div><AccountMenu /></div>
         </header>
 
         <section className={`workspace${step === 5 ? " scene-workspace-root" : ""}`}>
