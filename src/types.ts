@@ -20,6 +20,8 @@ export interface ImageCandidate {
   mode: "mock" | "openai" | "uploaded";
   media_type?: "image" | "video";
   duration_sec?: number;
+  storage_key?: string;
+  preview_storage_key?: string;
 }
 
 export interface Scene {
@@ -68,12 +70,14 @@ export interface SceneNarrationAudio {
   mime_type: string;
   path: string;
   duration_sec: number;
+  storage_key?: string;
 }
 
 export interface BackgroundMusic {
   name: string;
   mime_type: string;
   path: string;
+  storage_key?: string;
 }
 
 export interface CharacterProfile {
@@ -113,6 +117,9 @@ export interface ProjectData {
   background_music?: BackgroundMusic;
   created_at: string;
   updated_at: string;
+  cloud_owner_id?: string;
+  cloud_version?: number;
+  migration_pending?: boolean;
   source?: AppDataV2;
   app_state?: {
     selected_character_image?: string;

@@ -24,3 +24,13 @@
 .auth-footer{font-size:10px;color:#8b9389;letter-spacing:.4px}
 body:has(.auth-screen){min-width:0}
 @media(max-width:520px){.auth-card{padding:32px 24px}.auth-card h1{font-size:28px}}
+.cloud-setup-panel,.local-import-panel{max-width:1120px;margin:0 auto 24px;padding:20px 24px}
+.cloud-setup-panel>strong,.local-import-panel h3{color:#244c43;font-size:15px}
+.cloud-setup-panel>p,.local-import-panel>p{font-size:12px;line-height:1.8;color:#718178}
+.local-import-panel h3{display:flex;align-items:center;gap:10px;margin:0 0 8px}
+.local-import-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 0;border-top:1px solid #e7e4db}
+.local-import-row strong,.local-import-row small{display:block}
+.local-import-row strong{font-size:13px;color:#315449}
+.local-import-row small{font-size:10px;color:#869087;margin-top:4px}
+.local-import-panel .auth-error{margin:14px 0 0}
+.dashboard-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}

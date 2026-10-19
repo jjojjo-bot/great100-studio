@@ -1,0 +1,14 @@
+[
+  {
+    "AllowedOrigins": [
+      "https://great100-studio.vercel.app",
+      "http://localhost:1420",
+      "http://127.0.0.1:1420",
+      "http://localhost:3000"
+    ],
+    "AllowedMethods": ["GET", "PUT", "HEAD"],
+    "AllowedHeaders": ["Content-Type", "Range"],
+    "ExposeHeaders": ["ETag", "Content-Length", "Content-Range", "Accept-Ranges"],
+    "MaxAgeSeconds": 3600
+  }
+]

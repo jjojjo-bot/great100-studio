@@ -4,6 +4,8 @@ import JSZip from "jszip";
 import { MAX_MUSIC_BYTES, MAX_MUSIC_SECONDS } from "./music-limits";
 import { composeScenePrompt, composeThumbnailPrompt, withFullImagePrompts } from "./prompts";
 import { inspectSceneVideo, validateSceneVideoFile } from "./scene-video";
+import { cloudContext, createCloudProject, deleteCloudProject, downloadCloudFile, getCloudRenderedVideo, listCloudProjects, nextCloudEpisode, readCloudProject, saveCloudProject, saveCloudRenderedVideo, uploadCloudFile } from "./cloud";
+import { cloudAccessToken } from "./cloud-session";
 import type { BackgroundMusic, GenerateRequest, ImageCandidate, ProjectData, Scene, SceneNarrationAudio, VisualAsset } from "./types";
 
 export const isTauri = () => "__TAURI_INTERNALS__" in window;
@@ -46,9 +48,103 @@ export function setAccessCode(code: string) {
 
 export async function listProjects(): Promise<ProjectData[]> {
   if (isTauri()) return invoke("list_projects");
+  if (cloudContext()) return listCloudProjects();
+  return listLocalProjects();
+}
+
+export async function listLocalProjects(): Promise<ProjectData[]> {
   const db = await database();
   const projects = await db.getAll("projects") as ProjectData[];
   return projects.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+}
+
+export async function localProjectsForImport(): Promise<ProjectData[]> {
+  const context = cloudContext();
+  if (!context) return [];
+  const db = await database();
+  const projects = await listLocalProjects();
+  const pending = await Promise.all(projects.filter(project => !project.cloud_owner_id).map(async project => {
+    const marker = await db.get("settings", `cloud-import:${context.userId}:${project.id}`);
+    return marker?.completed ? null : project;
+  }));
+  return pending.filter((project): project is ProjectData => !!project);
+}
+
+export async function importLocalProject(localId: string, onProgress: (message: string) => void = () => {}): Promise<void> {
+  const context = cloudContext();
+  if (!context) throw new Error("로그인 후 작업을 옮겨 주세요.");
+  const db = await database();
+  const original = await db.get("projects", localId) as ProjectData | undefined;
+  if (!original || original.cloud_owner_id) throw new Error("이 브라우저의 원본 프로젝트를 찾지 못했습니다.");
+  const markerKey = `cloud-import:${context.userId}:${original.id}`;
+  const marker = await db.get("settings", markerKey) as { id: string; completed?: boolean } | undefined;
+  if (marker?.completed) return;
+  await cloudAccessToken(context);
+  let saved = marker ? await readCloudProject(marker.id) : null;
+  if (!saved) {
+    const empty = { ...structuredClone(original), id: crypto.randomUUID(), cloud_owner_id: context.userId, migration_pending: true,
+      background_music: undefined,
+      anchor: { ...original.anchor, candidates: [], selected_candidate_id: undefined },
+      thumbnail: { ...original.thumbnail, candidates: [], selected_candidate_id: undefined },
+      scenes: original.scenes.map(scene => ({ ...scene, candidates: [], support_candidates: [], narration_audio: undefined, selected_candidate_id: undefined, support_selected_candidate_id: undefined })),
+    };
+    saved = await createCloudProject(empty);
+    await db.put("settings", { id: saved.id, completed: false }, markerKey);
+  }
+  if (!saved.migration_pending) { await db.put("settings", { id: saved.id, completed: true }, markerKey); return; }
+  const target: ProjectData = { ...structuredClone(original), id: saved.id, episode: saved.episode, folder_name: saved.folder_name,
+    project_path: saved.project_path, cloud_owner_id: context.userId, cloud_version: saved.cloud_version, migration_pending: true };
+  const rewrite = (path: string) => path.replace(`${original.project_path}/`, `${target.project_path}/`);
+  const existingCandidates = new Map([saved.anchor, saved.thumbnail, ...saved.scenes].flatMap(asset => asset.candidates)
+    .concat(saved.scenes.flatMap(scene => scene.support_candidates || [])).map(candidate => [candidate.id, candidate]));
+  const all = [target.anchor, target.thumbnail, ...target.scenes].flatMap(asset => asset.candidates)
+    .concat(target.scenes.flatMap(scene => scene.support_candidates || []));
+  let done = 0;
+  for (const candidate of all) {
+    onProgress(`이미지·동영상 옮기는 중 ${++done}/${all.length}`);
+    candidate.path = rewrite(candidate.path);
+    const previous = existingCandidates.get(candidate.id);
+    if (previous?.storage_key) {
+      candidate.storage_key = previous.storage_key;
+      candidate.preview_storage_key = previous.preview_storage_key;
+      continue;
+    }
+    if (candidate.media_type === "video") {
+      const local = await db.get("media", sceneVideoKey(original, candidate.id)) as { blob: Blob } | undefined;
+      if (!local?.blob) throw new Error("동영상 원본이 없습니다. 원래 작업하던 브라우저에서 다시 시도해 주세요.");
+      candidate.storage_key = await uploadCloudFile(target.id, new Blob([local.blob], { type: "video/mp4" }), context);
+      candidate.preview_storage_key = await uploadCloudFile(target.id, await (await fetch(candidate.preview_url)).blob(), context);
+    } else {
+      if (!candidate.preview_url.startsWith("data:image/")) throw new Error("이미지 원본을 찾지 못했습니다.");
+      candidate.storage_key = await uploadCloudFile(target.id, await (await fetch(candidate.preview_url)).blob(), context);
+    }
+  }
+  if (target.background_music) {
+    onProgress("배경음악 옮기는 중");
+    const local = await db.get("audio", original.id) as { blob: Blob } | undefined;
+    if (!local?.blob) throw new Error("배경음악 원본을 찾지 못했습니다.");
+    target.background_music.path = rewrite(target.background_music.path);
+    target.background_music.storage_key = saved.background_music?.storage_key || await uploadCloudFile(target.id, new Blob([local.blob], { type: target.background_music.mime_type }), context);
+  }
+  for (const scene of target.scenes) {
+    if (!scene.narration_audio) continue;
+    onProgress(`Scene ${scene.number} 녹음 옮기는 중`);
+    const local = await db.get("audio", narrationKey(original, scene)) as { blob: Blob } | undefined;
+    if (!local?.blob) throw new Error(`Scene ${scene.number} 녹음 원본을 찾지 못했습니다.`);
+    scene.narration_audio.path = rewrite(scene.narration_audio.path);
+    scene.narration_audio.storage_key = saved.scenes.find(item => item.id === scene.id)?.narration_audio?.storage_key
+      || await uploadCloudFile(target.id, new Blob([local.blob], { type: scene.narration_audio.mime_type }), context);
+  }
+  onProgress("편집 정보 저장 중");
+  await saveCloudProject(withFullImagePrompts(target));
+  const rendered = await db.get("videos", original.id) as { blob: Blob; updated_at: string; render_version: number } | undefined;
+  if (rendered?.updated_at === original.updated_at && rendered.render_version === VIDEO_RENDER_VERSION) {
+    onProgress("완성 MP4 옮기는 중");
+    await saveCloudRenderedVideo(target, rendered.blob, VIDEO_RENDER_VERSION);
+  }
+  await saveCloudProject({ ...withFullImagePrompts(target), migration_pending: false });
+  await db.put("settings", { id: target.id, completed: true }, markerKey);
+  onProgress("계정으로 이전 완료");
 }
 
 export async function createProjectOnDisk(project: ProjectData): Promise<string> {
@@ -66,6 +162,7 @@ function nextEpisode(projects: ProjectData[], last: unknown): number {
 
 export async function getNextProjectEpisode(): Promise<number> {
   const desktop = isTauri();
+  if (!desktop && cloudContext()) return nextCloudEpisode();
   const diskProjects = desktop ? await listProjects() : [];
   const db = await database();
   const tx = db.transaction(["projects", "settings"], "readonly");
@@ -77,6 +174,7 @@ export async function getNextProjectEpisode(): Promise<number> {
 
 export async function createNumberedProject(draft: ProjectData): Promise<ProjectData> {
   const desktop = isTauri();
+  if (!desktop && cloudContext()) return createCloudProject(withFullImagePrompts(draft));
   const diskProjects = desktop ? await listProjects() : [];
   const db = await database();
   // The read and reservation share one transaction, including across browser tabs.
@@ -97,12 +195,14 @@ export async function createNumberedProject(draft: ProjectData): Promise<Project
 export async function saveProject(project: ProjectData): Promise<void> {
   const complete = withFullImagePrompts(project);
   if (isTauri()) return invoke("save_project", { project: complete });
+  if (cloudContext(project)) return saveCloudProject(complete);
   const db = await database();
   await db.put("projects", complete);
 }
 
 export async function deleteProject(project: ProjectData): Promise<string | undefined> {
   if (isTauri()) return invoke<string>("delete_project", { projectPath: project.project_path, projectId: project.id });
+  if (cloudContext(project)) { await deleteCloudProject(project); return; }
   const db = await database();
   const saved = await db.get("projects", project.id) as ProjectData | undefined;
   if (!saved || saved.project_path !== project.project_path || saved.folder_name !== project.folder_name) {
@@ -150,6 +250,7 @@ export async function saveBackgroundMusic(project: ProjectData, file: File): Pro
   }
   if (!Number.isFinite(duration) || duration <= 0 || duration > MAX_MUSIC_SECONDS) throw new Error("배경음악은 15분 이하 파일만 사용할 수 있습니다. 짧은 음악은 영상 길이만큼 반복됩니다.");
   const music = { name: file.name, mime_type: format.mime, path: `${project.project_path}/01_source/background_music.${format.extension}` };
+  if (!isTauri() && cloudContext(project)) return { ...music, storage_key: await uploadCloudFile(project.id, new Blob([file], { type: format.mime })) };
   if (isTauri()) {
     const dataUrl = await new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
@@ -167,6 +268,10 @@ export async function saveBackgroundMusic(project: ProjectData, file: File): Pro
 
 export async function getBackgroundMusic(project: ProjectData): Promise<Blob | null> {
   if (!project.background_music) return null;
+  if (!isTauri() && cloudContext(project)) {
+    if (!project.background_music.storage_key) throw new Error("배경음악 원본을 계정으로 옮겨 주세요.");
+    return downloadCloudFile(project, project.background_music.storage_key);
+  }
   if (isTauri()) {
     const encoded = await invoke<string>("read_background_music", { projectPath: project.project_path, mimeType: project.background_music.mime_type });
     return await (await fetch(`data:${project.background_music.mime_type};base64,${encoded}`)).blob();
@@ -177,6 +282,8 @@ export async function getBackgroundMusic(project: ProjectData): Promise<Blob | n
 }
 
 export async function removeBackgroundMusic(project: ProjectData): Promise<void> {
+  // Cloud objects are removed only after the updated project has been committed successfully.
+  if (!isTauri() && cloudContext(project)) return;
   if (isTauri()) await invoke("remove_background_music", { projectPath: project.project_path });
   else {
     const db = await database();
@@ -215,6 +322,7 @@ export async function saveSceneNarration(project: ProjectData, scene: Scene, fil
   if (!Number.isFinite(duration) || duration <= 0) throw new Error("녹음 길이를 확인할 수 없습니다.");
   if (duration > sceneDuration + 0.15) throw new Error(`녹음이 장면 길이(${sceneDuration}초)보다 깁니다. ${duration.toFixed(1)}초 녹음을 짧게 다시 만들거나 장면 시간을 조정해 주세요.`);
   const narration = { name: file.name, mime_type: mime, path: `${project.project_path}/03_images/scene${String(scene.number).padStart(2, "0")}/narration.${extension}`, duration_sec: duration };
+  if (!isTauri() && cloudContext(project)) return { ...narration, storage_key: await uploadCloudFile(project.id, new Blob([file], { type: mime })) };
   if (isTauri()) {
     const dataUrl = await new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
@@ -232,6 +340,10 @@ export async function saveSceneNarration(project: ProjectData, scene: Scene, fil
 
 export async function getSceneNarration(project: ProjectData, scene: Scene): Promise<Blob | null> {
   if (!scene.narration_audio) return null;
+  if (!isTauri() && cloudContext(project)) {
+    if (!scene.narration_audio.storage_key) throw new Error("녹음 원본을 계정으로 옮겨 주세요.");
+    return downloadCloudFile(project, scene.narration_audio.storage_key);
+  }
   if (isTauri()) {
     const encoded = await invoke<string>("read_scene_narration", { projectPath: project.project_path, sceneNumber: scene.number, mimeType: scene.narration_audio.mime_type });
     return await (await fetch(`data:${scene.narration_audio.mime_type};base64,${encoded}`)).blob();
@@ -242,6 +354,7 @@ export async function getSceneNarration(project: ProjectData, scene: Scene): Pro
 }
 
 export async function removeSceneNarration(project: ProjectData, scene: Scene): Promise<void> {
+  if (!isTauri() && cloudContext(project)) return;
   if (isTauri()) await invoke("remove_scene_narration", { projectPath: project.project_path, sceneNumber: scene.number });
   else {
     const db = await database();
@@ -294,6 +407,8 @@ export function detectImageFormat(bytes: Uint8Array): ImageFormat | null {
 export async function importImageCandidates(files: File[], location: ImageLocation): Promise<ImageCandidate[]> {
   if (!files.length) return [];
   if (files.length > 6) throw new Error("한 번에 최대 6장까지 업로드할 수 있습니다.");
+  const context = !isTauri() ? cloudContext() : null;
+  const projectId = context ? await findCloudProjectId(location.project_path, context) : undefined;
   const checked = await Promise.all(files.map(async (file) => {
     if (!file.size || file.size > 12_000_000) throw new Error(`${file.name}: 12MB 이하 이미지만 업로드할 수 있습니다.`);
     const format = detectImageFormat(new Uint8Array(await file.slice(0, 12).arrayBuffer()));
@@ -314,7 +429,8 @@ export async function importImageCandidates(files: File[], location: ImageLocati
       candidates.push(await invoke<ImageCandidate>("import_image", { request: { ...location, data_url: previewUrl } }));
     } else {
       const id = crypto.randomUUID();
-      candidates.push({ id, path: candidatePath(location, id, format.extension), preview_url: previewUrl, created_at: new Date().toISOString(), mode: "uploaded" });
+      const storage_key = projectId ? await uploadCloudFile(projectId, new Blob([file], { type: format.mime }), context!) : undefined;
+      candidates.push({ id, path: candidatePath(location, id, format.extension), preview_url: previewUrl, created_at: new Date().toISOString(), mode: "uploaded", ...(storage_key ? { storage_key } : {}) });
     }
   }
   return candidates;
@@ -327,6 +443,11 @@ export async function importSceneVideo(project: ProjectData, scene: Scene, file:
   const { duration, poster } = await inspectSceneVideo(file);
   let id: string = crypto.randomUUID();
   let path = `${project.project_path}/03_images/scene${String(scene.number).padStart(2, "0")}/candidate_${id}.mp4`;
+  if (!isTauri() && cloudContext(project)) {
+    const storage_key = await uploadCloudFile(project.id, new Blob([file], { type: "video/mp4" }));
+    const preview_storage_key = await uploadCloudFile(project.id, await (await fetch(poster)).blob());
+    return { id, path, preview_url: poster, created_at: new Date().toISOString(), mode: "uploaded", media_type: "video", duration_sec: duration, storage_key, preview_storage_key };
+  }
   if (isTauri()) {
     const dataUrl = await new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
@@ -346,6 +467,10 @@ export async function importSceneVideo(project: ProjectData, scene: Scene, file:
 
 export async function getSceneVideo(project: ProjectData, scene: Scene, candidate: ImageCandidate): Promise<Blob | null> {
   if (candidate.media_type !== "video") return null;
+  if (!isTauri() && cloudContext(project)) {
+    if (!candidate.storage_key) throw new Error("동영상 원본을 계정으로 옮겨 주세요.");
+    return downloadCloudFile(project, candidate.storage_key);
+  }
   if (isTauri()) {
     const encoded = await invoke<string>("read_scene_video", { projectPath: project.project_path, sceneNumber: scene.number, candidateId: candidate.id });
     return await (await fetch(`data:video/mp4;base64,${encoded}`)).blob();
@@ -362,6 +487,7 @@ export async function deleteCandidateAsset(project: ProjectData, kind: "anchor" 
   if (!candidates?.some((item) => item.id === candidate.id && item.path === candidate.path)) {
     throw new Error("삭제할 후보가 현재 프로젝트에 없습니다. 화면을 새로고침해 주세요.");
   }
+  if (!isTauri() && cloudContext(project)) return;
   if (isTauri()) {
     await invoke("delete_candidate_file", { projectPath: project.project_path, assetKind: kind, sceneNumber, candidateId: candidate.id, candidatePath: candidate.path });
   }
@@ -388,6 +514,7 @@ export function downloadBlob(blob: Blob, filename: string): void {
 }
 
 export async function saveRenderedVideo(project: ProjectData, blob: Blob): Promise<void> {
+  if (!isTauri() && cloudContext(project)) return saveCloudRenderedVideo(project, blob, VIDEO_RENDER_VERSION);
   if (isTauri()) {
     const bytes = new Uint8Array(await blob.arrayBuffer());
     const chunkSize = 0x8000;
@@ -400,6 +527,7 @@ export async function saveRenderedVideo(project: ProjectData, blob: Blob): Promi
 }
 
 export async function getRenderedVideo(project: ProjectData): Promise<Blob | null> {
+  if (!isTauri() && cloudContext(project)) return getCloudRenderedVideo(project, VIDEO_RENDER_VERSION);
   const db = await database();
   const saved = await db.get("videos", project.id) as { updated_at: string; render_version?: number; blob: Blob } | undefined;
   return saved?.updated_at === project.updated_at && saved.render_version === VIDEO_RENDER_VERSION ? saved.blob : null;
@@ -407,8 +535,7 @@ export async function getRenderedVideo(project: ProjectData): Promise<Blob | nul
 
 export async function exportProjectZip(project: ProjectData): Promise<void> {
   const video = await getRenderedVideo(project);
-  if (!video) throw new Error("완성 단계에서 MP4를 먼저 만들어 주세요.");
-  downloadBlob(await buildProjectZip(project, video), `${project.folder_name}.zip`);
+  downloadBlob(await buildProjectZip(project, video || undefined), `${project.folder_name}.zip`);
 }
 
 export async function buildProjectZip(project: ProjectData, video?: Blob): Promise<Blob> {
@@ -448,7 +575,8 @@ export async function buildProjectZip(project: ProjectData, video?: Blob): Promi
   root.file("06_logs/prompt_history.jsonl", promptHistory.join("\n") + (promptHistory.length ? "\n" : ""));
   for (const [assetIndex, asset] of [project.anchor, project.thumbnail, ...project.scenes, ...project.scenes.map((scene) => ({ candidates: scene.support_candidates || [], selected_candidate_id: scene.support_selected_candidate_id }))].entries()) {
     for (const candidate of asset.candidates) {
-      const blob = candidate.media_type === "video" ? await getSceneVideo(project, project.scenes[assetIndex - 2], candidate) : await (await fetch(candidate.preview_url)).blob();
+      const blob = candidate.media_type === "video" ? await getSceneVideo(project, project.scenes[assetIndex - 2], candidate)
+        : candidate.storage_key && cloudContext(project) ? await downloadCloudFile(project, candidate.storage_key) : await (await fetch(candidate.preview_url)).blob();
       if (!blob) throw new Error(`Scene ${project.scenes[assetIndex - 2]?.number} 동영상 파일을 찾지 못했습니다.`);
       const path = candidate.path.replace(`${project.project_path}/`, "");
       root.file(path, blob);
@@ -460,6 +588,12 @@ export async function buildProjectZip(project: ProjectData, video?: Blob): Promi
     }
   }
   return zip.generateAsync({ type: "blob" });
+}
+
+async function findCloudProjectId(projectPath: string, context: NonNullable<ReturnType<typeof cloudContext>>): Promise<string> {
+  const { data, error } = await context.client.from("great100_projects").select("id").eq("owner_id", context.userId).eq("data->>project_path", projectPath).single();
+  if (error || !data) throw new Error("이미지를 저장할 프로젝트를 찾지 못했습니다.");
+  return data.id;
 }
 
 function historyLines(kind: string, asset: VisualAsset) {

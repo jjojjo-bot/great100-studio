@@ -1,6 +1,7 @@
 import { getBackgroundMusic, getSceneNarration, getSceneVideo } from "./platform";
 import { openSceneVideo } from "./scene-video";
 import { reportForProject } from "./app-data";
+import { refreshCloudPreviews } from "./cloud";
 import type { CaptionBlock, ImageCandidate, ImageMotion, ProjectData, Scene } from "./types";
 
 export const VIDEO_WIDTH = 1280;
@@ -344,12 +345,14 @@ export function drawFrame(ctx: CanvasRenderingContext2D, image: HTMLImageElement
 
 async function loadImage(url: string): Promise<HTMLImageElement> {
   const image = new Image();
+  image.crossOrigin = "anonymous";
   image.src = url;
   await image.decode();
   return image;
 }
 
 export async function renderProjectMp4(project: ProjectData, onProgress: (percent: number) => void = () => {}): Promise<Blob> {
+  if (project.cloud_owner_id) project = await refreshCloudPreviews(project);
   const plan = buildVideoPlan(project);
   const { AudioBufferSource, BufferTarget, CanvasSource, Mp4OutputFormat, Output, Quality, canEncodeAudio, canEncodeVideo } = await import("mediabunny");
   if (!(await canEncodeVideo("avc", { width: VIDEO_WIDTH, height: VIDEO_HEIGHT, frameRate: VIDEO_FPS }))) {

@@ -3,6 +3,7 @@ import { LoaderCircle, LogOut } from "lucide-react";
 import type { Session, SupabaseClient } from "@supabase/supabase-js";
 import { isTauri } from "./platform";
 import { authRedirectUrl, clearAuthRedirect, getAuthClient } from "./supabase";
+import { setCloudSession } from "./cloud-session";
 import "./auth.css";
 
 interface AuthState {
@@ -46,6 +47,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     const { data: { subscription } } = client.auth.onAuthStateChange((_event, nextSession) => {
       if (!active) return;
       eventVersion++;
+      setCloudSession(client, nextSession);
       setSession(nextSession);
       if (nextSession) setError("");
     });
@@ -56,7 +58,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       if (initialized.error) throw initialized.error;
       const { data, error: restoreError } = await client.auth.getSession();
       if (restoreError) throw restoreError;
-      if (active && eventVersion === version) setSession(data.session);
+      if (active && eventVersion === version) { setCloudSession(client, data.session); setSession(data.session); }
     };
     void restore().catch((cause) => {
       if (active) setError(loginError(cause));
@@ -66,7 +68,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
         setLoading(false);
       }
     });
-    return () => { active = false; subscription.unsubscribe(); };
+    return () => { active = false; subscription.unsubscribe(); setCloudSession(null, null); };
   }, [client]);
 
   const signIn = async () => {
@@ -114,14 +116,14 @@ function LoginScreen({ loading, busy, error, onSignIn, onRetry }: { loading?: bo
           {busy ? <LoaderCircle className="spin" size={20} /> : <GoogleMark />}{busy ? "Google로 연결 중…" : "Google로 계속하기"}
         </button>
         {error && onRetry && <button className="text-button auth-retry" onClick={onRetry}>로그인 상태 다시 확인</button>}
-        <small className="auth-storage-note">현재 프로젝트와 업로드 파일은 이 브라우저에 저장됩니다.</small>
+        <small className="auth-storage-note">로그인 후 계정에 저장한 작업을 불러올 수 있습니다.</small>
       </>}
     </section>
     <span className="auth-footer">한국을 빛낸 100인 · Great100 Studio</span>
   </main>;
 }
 
-export function AccountMenu() {
+export function AccountMenu({ storageStatus = "작업은 이 브라우저에 저장됩니다.", saving = false }: { storageStatus?: string; saving?: boolean }) {
   const { client, session } = useContext(AuthContext);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -137,8 +139,8 @@ export function AccountMenu() {
     } finally { setBusy(false); }
   };
   return <div className="account-menu">
-    <div className="account-details"><strong>{session.user.email || "Google 계정"}</strong><small>작업은 이 브라우저에 저장됩니다.</small></div>
-    <button className="btn ghost" onClick={signOut} disabled={busy}>{busy ? <LoaderCircle className="spin" size={14} /> : <LogOut size={14} />} 로그아웃</button>
+    <div className="account-details"><strong>{session.user.email || "Google 계정"}</strong><small aria-live="polite">{storageStatus}</small></div>
+    <button className="btn ghost" onClick={signOut} disabled={busy || saving}>{busy ? <LoaderCircle className="spin" size={14} /> : <LogOut size={14} />} 로그아웃</button>
     {error && <span className="account-error" role="alert">{error}</span>}
   </div>;
 }

@@ -8,6 +8,7 @@ const clamp = (value: number, min: number, max: number) => Math.max(min, Math.mi
 const loadImage = async (url?: string) => {
   if (!url) return null;
   const image = new Image();
+  image.crossOrigin = "anonymous";
   image.src = url;
   await image.decode();
   return image;

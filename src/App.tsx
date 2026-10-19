@@ -37,6 +37,9 @@ import { SAMPLE_WORK_TEXT } from "./sample";
 import { PersonPicker } from "./PersonPicker";
 import { useStepHistory } from "./useStepHistory";
 import { AccountMenu, AuthGate } from "./Auth";
+import { checkCloudStorage, cloudContext } from "./cloud";
+import { mergeProjectChanges } from "./project-changes";
+import { LocalProjectImport } from "./LocalProjectImport";
 import type { ImageCandidate, ImageMotion, ProjectData, Scene, VisualAsset } from "./types";
 
 const STEPS = ["대시보드", "프로젝트", "파싱 확인", "사전 점검", "기준 이미지", "Scene 검토", "썸네일", "전체 검토", "완료"];
@@ -59,18 +62,65 @@ function Studio() {
   const [deletingId, setDeletingId] = useState("");
   const [projects, setProjects] = useState<ProjectData[]>([]);
   const [accessCode, updateAccessCode] = useState(getAccessCode);
+  const cloud = !!cloudContext();
+  const [storageReady, setStorageReady] = useState(!cloud);
+  const [storageLoading, setStorageLoading] = useState(cloud);
+  const [saveCount, setSaveCount] = useState(0);
+  const [saveError, setSaveError] = useState("");
+  const [importing, setImporting] = useState(false);
+  const saveFailures = useRef(new Map<string, string>());
+  const projectRef = useRef(project);
+  const latestProjects = useRef(new Map<string, ProjectData>());
+  const pendingSaves = useRef(0);
+  const loadVersion = useRef(0);
+  const selectProject = (value: ProjectData | null) => { projectRef.current = value; setProject(value); };
+  const storageStatus = saveError ? "저장 실패 · 확인 필요" : saveCount ? "변경사항 저장 중…"
+    : cloud ? storageReady ? "계정에 저장됨" : "계정 저장 연결 확인 필요" : "이 브라우저에 저장됨";
+
+  const reloadProjects = async (discardChanges = false) => {
+    if (pendingSaves.current || (saveError && !discardChanges)) { setNotice("저장이 끝난 뒤 새로고침해 주세요. 저장 실패 시 현재 작업의 ZIP을 먼저 보관해 주세요."); return; }
+    const version = ++loadVersion.current;
+    setStorageLoading(true);
+    try {
+      if (cloud) {
+        const readiness = await checkCloudStorage();
+        if (version !== loadVersion.current) return;
+        if (!readiness.databaseReady || !readiness.storageReady) { setStorageReady(false); return; }
+      }
+      const items = await listProjects();
+      if (version !== loadVersion.current) return;
+      latestProjects.current = new Map(items.map(item => [item.id, item]));
+      setProjects(items); setStorageReady(true);
+      if (discardChanges) {
+        saveFailures.current.clear(); setSaveError(""); setNotice("");
+        const selected = items.find(item => item.id === projectRef.current?.id);
+        selectProject(selected || null);
+        if (!selected) setStep(0);
+      }
+    } catch (error) {
+      if (version === loadVersion.current) { if (cloud) setStorageReady(false); setNotice(`프로젝트 목록을 읽지 못했습니다: ${String(error)}`); }
+    } finally { if (version === loadVersion.current) setStorageLoading(false); }
+  };
 
   useStepHistory(step, project?.id, (location) => {
     const saved = location.projectId
       ? projects.find((item) => item.id === location.projectId) || (project?.id === location.projectId ? project : null)
       : null;
-    setProject(saved);
+    selectProject(saved);
     setStep(location.step > 1 && !saved ? 0 : location.step);
   });
 
   useEffect(() => {
-    listProjects().then(setProjects).catch((error) => setNotice(`프로젝트 목록을 읽지 못했습니다: ${String(error)}`));
+    void reloadProjects();
+    return () => { loadVersion.current++; };
   }, []);
+
+  useEffect(() => {
+    if (!saveCount && !saveError) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [saveCount, saveError]);
 
   useEffect(() => {
     if (step === 1) {
@@ -100,8 +150,8 @@ function Studio() {
       }
       setSetupErrors([]);
       draft = await createNumberedProject(draft);
-      await saveProject(draft);
-      setProject(draft);
+      latestProjects.current.set(draft.id, draft);
+      selectProject(draft);
       setProjects((items) => [draft, ...items]);
       setPerson(draft.person);
       setNotice(draft.scenes.length ? `${draft.scenes.length}개 장면을 찾았습니다.` : "");
@@ -114,16 +164,26 @@ function Studio() {
   };
 
   const persist = async (next: ProjectData) => {
-    const updated = { ...next, updated_at: new Date().toISOString(), app_state: next.schema_version !== 1 ? {
-      selected_character_image: next.anchor.selected_candidate_id,
-      selected_scene_images: Object.fromEntries(next.scenes.filter((scene) => scene.selected_candidate_id).map((scene) => [scene.source_scene_id || scene.id, scene.selected_candidate_id!])),
-      selected_thumbnail: next.thumbnail.selected_candidate_id,
-      warnings: reportForProject(next).warnings,
-    } : next.app_state };
-    setProject(updated);
+    const current = latestProjects.current.get(next.id) || next;
+    const merged = mergeProjectChanges(project, next, current);
+    const updated = { ...merged, updated_at: new Date().toISOString(), app_state: merged.schema_version !== 1 ? {
+      selected_character_image: merged.anchor.selected_candidate_id,
+      selected_scene_images: Object.fromEntries(merged.scenes.filter((scene) => scene.selected_candidate_id).map((scene) => [scene.source_scene_id || scene.id, scene.selected_candidate_id!])),
+      selected_thumbnail: merged.thumbnail.selected_candidate_id,
+      warnings: reportForProject(merged).warnings,
+    } : merged.app_state };
+    latestProjects.current.set(updated.id, updated);
+    if (projectRef.current?.id === updated.id) selectProject(updated);
     setProjects((items) => items.map((item) => item.id === updated.id ? updated : item));
-    try { await saveProject(updated); }
-    catch (error) { setNotice(`저장 실패: ${String(error)}`); }
+    pendingSaves.current++; setSaveCount(pendingSaves.current);
+    try {
+      await saveProject(updated);
+      if (latestProjects.current.get(updated.id) === updated) saveFailures.current.delete(updated.id);
+      setSaveError([...saveFailures.current.values()].join("\n"));
+    } catch (error) {
+      saveFailures.current.set(updated.id, String(error));
+      setSaveError([...saveFailures.current.values()].join("\n")); setNotice(`저장 실패: ${String(error)}`);
+    } finally { pendingSaves.current--; setSaveCount(pendingSaves.current); }
   };
 
   const download = async (item: ProjectData) => {
@@ -135,13 +195,16 @@ function Studio() {
     const label = `EP. ${String(item.episode).padStart(3, "0")} · ${item.person} (${item.folder_name})`;
     const consequence = isTauri()
       ? "프로젝트 폴더는 projects/.trash로 이동하며 앱 목록에서 사라집니다."
-      : "이 브라우저에 저장된 프로젝트·후보 이미지·완성 MP4가 함께 삭제되며 복구할 수 없습니다.";
+      : cloud ? "계정에 저장된 프로젝트·이미지·동영상·녹음·완성 MP4가 함께 삭제되며 복구할 수 없습니다."
+        : "이 브라우저에 저장된 프로젝트·후보 이미지·완성 MP4가 함께 삭제되며 복구할 수 없습니다.";
     if (!window.confirm(`${label}\n\n${consequence}\n\n정말 삭제할까요?`)) return;
     setDeletingId(item.id);
     try {
       await deleteProject(item);
       setProjects((items) => items.filter((saved) => saved.id !== item.id));
-      if (project?.id === item.id) setProject(null);
+      latestProjects.current.delete(item.id);
+      saveFailures.current.delete(item.id); setSaveError([...saveFailures.current.values()].join("\n"));
+      if (projectRef.current?.id === item.id) selectProject(null);
       setNotice(isTauri() ? `${label} 프로젝트를 휴지통으로 옮겼습니다.` : `${label} 프로젝트를 삭제했습니다.`);
     } catch (error) { setNotice(`프로젝트 삭제 실패: ${String(error)}`); }
     finally { setDeletingId(""); }
@@ -175,7 +238,7 @@ function Studio() {
         </div>
         <nav className="steps" aria-label="제작 단계">
           {STEPS.map((label, index) => (
-            <button key={label} className={`step ${index === step ? "active" : ""} ${index < step ? "done" : ""}`} onClick={() => (index <= 1 || (project && index <= step)) && setStep(index)} disabled={!project && index > 1}>
+            <button key={label} className={`step ${index === step ? "active" : ""} ${index < step ? "done" : ""}`} onClick={() => (index <= 1 || (project && index <= step)) && setStep(index)} disabled={importing || !!deletingId || (index === 1 && !storageReady) || (!project && index > 1)}>
               <span>{index < step ? <Check size={14} /> : index + 1}</span>{label}
             </button>
           ))}
@@ -189,12 +252,15 @@ function Studio() {
       <main>
         <header className="topbar">
           <div className="breadcrumb">한국을 빛낸 100인 <b>/</b> {project?.person || "새 프로젝트"}</div>
-          <div className="topbar-actions"><div className="progress-wrap"><span>{progress}%</span><div><i style={{ width: `${progress}%` }} /></div></div><AccountMenu /></div>
+          <div className="topbar-actions"><div className="progress-wrap"><span>{progress}%</span><div><i style={{ width: `${progress}%` }} /></div></div><AccountMenu storageStatus={storageStatus} saving={saveCount > 0 || !!saveError || importing || !!deletingId || busy} /></div>
         </header>
 
         <section className={`workspace${step === 5 ? " scene-workspace-root" : ""}`}>
           {notice && <div className="toast" onClick={() => setNotice("")}>{notice}</div>}
-          {step === 0 && <Dashboard onStart={() => { setProject(null); setStep(1); }} projects={projects} accessCode={accessCode} onAccessCode={(code) => { updateAccessCode(code); setAccessCode(code); }} onOpen={(item) => { setProject(item); setStep(2); }} onDownload={download} onDelete={removeProject} deletingId={deletingId} />}
+          {saveError && <div className="panel cloud-setup-panel" role="alert"><strong>계정에 저장하지 못한 변경사항이 있습니다.</strong><p>{saveError}</p><div className="dashboard-actions"><button className="btn ghost" disabled={saveCount > 0} onClick={() => { for (const id of saveFailures.current.keys()) { const item = latestProjects.current.get(id); if (item) void persist(item); } }}>저장 다시 시도</button><button className="btn ghost" onClick={() => { for (const id of saveFailures.current.keys()) { const item = latestProjects.current.get(id); if (item) void download(item); } }}>편집본 ZIP 보관</button><button className="btn ghost" disabled={saveCount > 0} onClick={() => { if (window.confirm("저장하지 못한 현재 편집 내용을 버리고 계정의 최신 작업을 불러올까요?\n\n현재 편집본이 필요하면 먼저 ZIP으로 보관해 주세요.")) void reloadProjects(true); }}>최신 작업 불러오기</button></div></div>}
+          {step === 0 && cloud && !storageReady && <div className="panel cloud-setup-panel" role="status"><strong>{storageLoading ? "계정 저장소에 연결하고 있어요." : "계정 저장 연결을 준비하고 있어요."}</strong><p>연결이 완료되면 계정의 프로젝트와 파일을 불러올 수 있습니다. 기존 브라우저 작업은 그대로 보관돼 있습니다.</p><button className="btn ghost" disabled={storageLoading} onClick={() => void reloadProjects()}>연결 다시 확인</button></div>}
+          {step === 0 && cloud && storageReady && <LocalProjectImport onImported={reloadProjects} onBusyChange={setImporting} />}
+          {step === 0 && <Dashboard onStart={() => { selectProject(null); setStep(1); }} projects={projects} accessCode={accessCode} onAccessCode={(code) => { updateAccessCode(code); setAccessCode(code); }} onOpen={(item) => { selectProject(latestProjects.current.get(item.id) || item); setStep(2); }} onDownload={download} onDelete={removeProject} deletingId={deletingId} ready={storageReady && !importing && !deletingId} onReload={reloadProjects} refreshing={storageLoading || saveCount > 0 || importing || !!deletingId} />}
           {step === 1 && (
             <ProjectSetup episode={episode} person={person} category={category} source={source} busy={busy} legacyImport={legacyImport} setLegacyImport={setLegacyImport} errors={setupErrors}
               setPerson={setPerson} setCategory={setCategory} setSource={setSource}
@@ -212,7 +278,7 @@ function Studio() {
         {step > 1 && project && (
           <footer className="bottom-bar">
             <button className="btn ghost" onClick={() => setStep((value) => Math.max(0, value - 1))}><ArrowLeft size={17} /> 이전</button>
-            <span><Save size={15} /> 변경사항 자동 저장됨</span>
+            <span aria-live="polite">{saveCount ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}{storageStatus}{saveError && <button className="text-button" onClick={() => { if (projectRef.current) void persist(projectRef.current); }}>저장 다시 시도</button>}</span>
             {step < 8 && <button className="btn primary" disabled={(step === 2 && (!project.scenes.length || project.scenes.some((scene) => !scene.prompt.trim()))) || (step === 3 && reportForProject(project).errors.length > 0) || (step === 7 && completionErrors(project).length > 0)} onClick={() => setStep((value) => Math.min(8, value + 1))}>다음 단계 <ArrowRight size={17} /></button>}
           </footer>
         )}
@@ -221,13 +287,13 @@ function Studio() {
   );
 }
 
-function Dashboard({ onStart, projects, accessCode, onAccessCode, onOpen, onDownload, onDelete, deletingId }: { onStart: () => void; projects: ProjectData[]; accessCode: string; onAccessCode: (code: string) => void; onOpen: (project: ProjectData) => void; onDownload: (project: ProjectData) => void; onDelete: (project: ProjectData) => void; deletingId: string }) {
+function Dashboard({ onStart, projects, accessCode, onAccessCode, onOpen, onDownload, onDelete, deletingId, ready, onReload, refreshing }: { onStart: () => void; projects: ProjectData[]; accessCode: string; onAccessCode: (code: string) => void; onOpen: (project: ProjectData) => void; onDownload: (project: ProjectData) => void; onDelete: (project: ProjectData) => void; deletingId: string; ready: boolean; onReload: () => Promise<void>; refreshing: boolean }) {
   return <div className="dashboard-page"><div className="hero-page">
     <div className="hero-copy">
       <div className="eyebrow">GREAT STORIES, BEAUTIFULLY MADE</div>
       <h1>한 사람의 이야기를<br /><em>한 편의 그림책처럼.</em></h1>
       <p>Work 제작안을 붙여넣으면 장면 이미지·동영상과 자막을 준비하고<br />직접 녹음한 내레이션과 배경음악을 더한 MP4까지 만들 수 있어요.</p>
-      <button className="btn primary large" onClick={onStart}><Plus size={19} /> 새 인물 프로젝트</button>
+      <div className="dashboard-actions"><button className="btn primary large" disabled={!ready} onClick={onStart}><Plus size={19} /> 새 인물 프로젝트</button><button className="btn ghost" disabled={refreshing} onClick={() => void onReload()}><RefreshCw size={15} /> 작업 목록 새로고침</button></div>
     </div>
     <div className="hero-art" role="img" aria-label="100인의 이야기를 담은 현대적인 책 표지 디자인">
       <div className="collection-label"><span>THE GREAT100 COLLECTION</span><span>01 — 100</span></div>
