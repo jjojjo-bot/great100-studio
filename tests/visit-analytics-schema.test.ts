@@ -10,6 +10,12 @@ const sessionB = "44444444-4444-4444-8444-444444444444";
 const sessionA2 = "55555555-5555-4555-8555-555555555555";
 const migration = readFileSync(new URL("../supabase/migrations/202610190002_visit_analytics.sql", import.meta.url), "utf8");
 const reports = readFileSync(new URL("../supabase/queries/visit_analytics.sql", import.meta.url), "utf8");
+const chartMigration = readFileSync(new URL("../supabase/migrations/202610190003_visitor_chart.sql", import.meta.url), "utf8");
+const grantAdmin = readFileSync(new URL("../supabase/queries/grant_analytics_admin.sql", import.meta.url), "utf8");
+const grantAdminFor = (email: string) => grantAdmin.replace(
+  /admin_email\s+text\s*:=\s*'(?:[^']|'')*'/,
+  `admin_email text := '${email.replaceAll("'", "''")}'`,
+);
 
 async function asUser(userId: string, sessionId: string) {
   await db.exec("reset role");
@@ -30,9 +36,11 @@ beforeAll(async () => {
     insert into auth.users values ('${alice}', 'alice@example.com'), ('${bob}', 'bob@example.com');
   `);
   await db.exec(migration); await db.exec(migration);
+  await db.exec(chartMigration); await db.exec(chartMigration);
 }, 30_000);
 beforeEach(async () => {
   await db.exec("reset role; delete from public.great100_daily_visits; delete from public.great100_login_history; delete from auth.sessions");
+  await db.exec("delete from public.great100_analytics_admins");
   await db.query("insert into auth.sessions values ($1,$2,now()),($3,$4,now()),($5,$2,now())", [sessionA, alice, sessionB, bob, sessionA2]);
 });
 afterAll(async () => { await db.close(); });
@@ -93,4 +101,52 @@ it("groups sign-ins across the Korean midnight boundary and executes all admin r
   ]);
   const result = await db.exec(reports);
   expect(result[0].rows).toHaveLength(30); expect(result[1].rows).toHaveLength(2); expect(result[2].rows).toHaveLength(0);
+});
+
+interface ChartData {
+  today: string; today_visitors: number; week_visitors: number;
+  daily: { period_start: string; period_end: string; visitors: number }[];
+  weekly: { period_start: string; period_end: string; visitors: number }[];
+}
+const trends = async () => (await db.query<{ chart: ChartData }>("select public.great100_visitor_trends() as chart")).rows[0].chart;
+
+it("denies non-admin totals and self-promotion, including direct RPC calls", async () => {
+  await asUser(alice, sessionA);
+  expect((await db.query<{ allowed: boolean }>("select public.great100_is_analytics_admin() as allowed")).rows[0].allowed).toBe(false);
+  await expect(trends()).rejects.toThrow("ANALYTICS_ADMIN_REQUIRED");
+  await expect(db.query("insert into public.great100_analytics_admins (user_id) values ($1)", [alice])).rejects.toThrow();
+  await expect(db.query("select * from public.great100_analytics_admins")).rejects.toThrow();
+  await db.exec("reset role; set role anon"); await expect(trends()).rejects.toThrow();
+});
+
+it("returns 14 days and 8 Monday-based weeks with zeros for missing dates", async () => {
+  await db.exec(grantAdminFor("ALICE@EXAMPLE.COM"));
+  await asUser(alice, sessionA);
+  const chart = await trends();
+  expect(chart.daily).toHaveLength(14); expect(chart.weekly).toHaveLength(8);
+  expect(chart.daily.every(point => point.visitors === 0)).toBe(true);
+  expect(chart.weekly.every(point => new Date(`${point.period_start}T00:00:00Z`).getUTCDay() === 1)).toBe(true);
+  expect(chart.weekly.at(-1)!.period_end).toBe(chart.today);
+  expect(chart.daily.at(-1)!.period_end).toBe(chart.today);
+  expect(chart.today_visitors).toBe(0); expect(chart.week_visitors).toBe(0);
+});
+
+it("counts distinct people per week across multiple days instead of summing daily counts", async () => {
+  await asUser(alice, sessionA); await record();
+  await asUser(bob, sessionB); await record();
+  await db.exec("reset role");
+  await db.query(`insert into public.great100_daily_visits values
+    ($1, date_trunc('week', now() at time zone 'Asia/Seoul')::date - 7, now(), now()),
+    ($1, date_trunc('week', now() at time zone 'Asia/Seoul')::date - 6, now(), now()),
+    ($2, date_trunc('week', now() at time zone 'Asia/Seoul')::date - 6, now(), now())`, [alice, bob]);
+  await db.exec(grantAdminFor("alice@example.com"));
+  await asUser(alice, sessionA);
+  const chart = await trends();
+  expect(chart.today_visitors).toBe(2); expect(chart.week_visitors).toBe(2);
+  expect(chart.weekly.at(-2)!.visitors).toBe(2);
+  expect(JSON.stringify(chart)).not.toContain(alice); expect(JSON.stringify(chart)).not.toContain("@example.com");
+  await db.exec("reset role"); await db.exec(chartMigration);
+  await asUser(alice, sessionA); expect((await trends()).week_visitors).toBe(2);
+  await db.exec("reset role"); await db.query("delete from public.great100_analytics_admins where user_id=$1", [alice]);
+  await asUser(alice, sessionA); await expect(trends()).rejects.toThrow("ANALYTICS_ADMIN_REQUIRED");
 });

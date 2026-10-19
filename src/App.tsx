@@ -40,6 +40,7 @@ import { AccountMenu, AuthGate } from "./Auth";
 import { checkCloudStorage, cloudContext } from "./cloud";
 import { mergeProjectChanges } from "./project-changes";
 import { LocalProjectImport } from "./LocalProjectImport";
+import { VisitorTrends } from "./VisitorTrends";
 import type { ImageCandidate, ImageMotion, ProjectData, Scene, VisualAsset } from "./types";
 
 const STEPS = ["대시보드", "프로젝트", "파싱 확인", "사전 점검", "기준 이미지", "Scene 검토", "썸네일", "전체 검토", "완료"];
@@ -310,8 +311,10 @@ function Dashboard({ onStart, projects, accessCode, onAccessCode, onOpen, onDown
       <div className="collection-footer"><span>A LIFE. A STORY.</span><span>100인의 삶을 담다</span></div>
     </div>
   </div>
+  <div className="dashboard-details"><VisitorTrends /><div className="dashboard-primary">
   {!isTauri() && <div className="access-panel"><KeyRound size={18} /><div><strong>실제 이미지 생성 접근 코드</strong><small>배포 관리자에게 받은 코드를 입력하면 OpenAI 이미지 생성이 활성화됩니다. 비워두면 mock mode로 작동합니다.</small></div><input type="password" aria-label="이미지 생성 접근 코드" placeholder="접근 코드 입력" value={accessCode} onChange={(event) => onAccessCode(event.target.value)} /></div>}
   {projects.length > 0 && <div className="recent-projects"><div className="recent-head"><h3>최근 프로젝트</h3><span>{projects.length}개</span></div><div className="recent-grid">{projects.map((item) => <div className="recent-card" key={item.id}><span>EP. {String(item.episode).padStart(3, "0")}</span><strong>{item.person}</strong><small>{item.scenes.length}개 장면 · {new Date(item.updated_at).toLocaleDateString("ko-KR")}</small><div><button className="btn ghost" onClick={() => onOpen(item)}>이어 작업하기</button>{!isTauri() && <button className="btn ghost" onClick={() => onDownload(item)}><Download size={14} /> ZIP</button>}<button className="btn ghost delete-project" disabled={deletingId === item.id} onClick={() => onDelete(item)}>{deletingId === item.id ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />} 삭제</button></div></div>)}</div></div>}
+  </div></div>
   </div>;
 }
 

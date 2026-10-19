@@ -34,6 +34,7 @@ export function startVisitTracking(client: SupabaseClient, session: Session): ()
         const { error } = await client.rpc("great100_record_visit").abortSignal(controller.signal);
         if (error) return false;
         visits.recorded.add(key);
+        window.dispatchEvent(new Event("great100:visit-recorded"));
         return true;
       } catch { return false; }
       finally { window.clearTimeout(timeout); visits.pending.delete(key); }

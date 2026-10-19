@@ -148,6 +148,23 @@ order by visit_date desc;
 
 연동 기준: [Supabase 사용자 세션](https://supabase.com/docs/guides/auth/sessions), [인증 이벤트](https://supabase.com/docs/reference/javascript/auth-onauthstatechange), [RLS와 뷰 접근](https://supabase.com/docs/guides/database/postgres/row-level-security).
 
+### 대시보드 방문 추이 그래프
+
+대시보드 오른쪽의 작은 **방문 추이** 카드에서 **최근 14일 / 최근 8주**를 전환합니다. 오늘·이번 주 방문자 수와 날짜별 막대를 표시하며 마우스를 올리거나 키보드로 막대에 포커스하면 해당 기간의 숫자를 확인할 수 있습니다. 한국 시간 기준이며 주는 월요일에 시작합니다. 주별 방문자는 일별 합계가 아니라 그 주에 방문한 **서로 다른 계정 수**입니다.
+
+전체 통계는 지정한 관리자에게만 표시됩니다. 다음 두 SQL을 Supabase SQL Editor의 기본 `postgres` 역할로 한 번 실행합니다.
+
+1. [`supabase/migrations/202610190003_visitor_chart.sql`](supabase/migrations/202610190003_visitor_chart.sql) 전체를 실행합니다. 앞의 방문 기록 SQL이 설치돼 있어야 합니다.
+2. [`supabase/queries/grant_analytics_admin.sql`](supabase/queries/grant_analytics_admin.sql)의 `YOUR_GOOGLE_EMAIL`을 Great100에 로그인한 본인 Google 이메일로 바꾸고 전체를 실행합니다. 이메일은 Vercel 환경변수나 채팅에 입력할 필요가 없습니다.
+3. 운영 사이트를 새로고침하면 카드가 나타납니다. 화면을 보고 있는 동안 1분마다, 다른 탭에서 돌아올 때와 새 방문 기록 직후에 갱신합니다. 카드의 새로고침 버튼으로 바로 갱신할 수도 있습니다.
+
+일반 사용자는 카드를 보지 못하며 통계 함수를 직접 호출해도 조회할 수 없습니다. 관리자 목록도 앱에서 수정할 수 없습니다. 관리자 권한을 취소할 때는 SQL Editor에서 다음을 실행합니다.
+
+```sql
+delete from public.great100_analytics_admins
+where user_id = (select id from auth.users where email = '취소할 Google 이메일');
+```
+
 ## 영상 제작과 저장
 
 웹앱에서 접근 코드를 비워두면 mock 이미지로 전체 흐름을 사용할 수 있습니다. 로그인한 웹앱은 계정 저장소를 사용하고, 인증을 설정하지 않은 개발 환경은 브라우저의 IndexedDB를 사용합니다. 장면별 자막과 표시 시간을 수정하고 모든 장면의 이미지 또는 동영상을 선택한 뒤 완료 단계에서 **MP4 만들기**를 누르세요. 브라우저가 1280×720 H.264 MP4를 직접 만들며, 장면별 내레이션과 배경음악을 추가할 수도 있습니다. 최신 Chrome/Edge에서 사용하세요.
