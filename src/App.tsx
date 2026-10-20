@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import "./v2.css";
 import {
   ArrowLeft,
@@ -36,6 +36,8 @@ import { SceneNarrationPanel } from "./SceneNarrationPanel";
 import { applyGeneratedNarration, type GeneratedNarrationRequest } from "./narration-generation";
 import { SceneTimingPanel } from "./SceneTimingPanel";
 import { FullVideoPreview } from "./FullVideoPreview";
+import { SceneReviewBoard } from "./SceneReviewBoard";
+import { createReviewView, type ReviewView } from "./scene-review";
 import { ScenePreviewPane } from "./SceneTimeline";
 import { SAMPLE_WORK_TEXT } from "./sample";
 import { PersonPicker } from "./PersonPicker";
@@ -107,6 +109,10 @@ function Studio() {
   const latestProjects = useRef(new Map<string, ProjectData>());
   const pendingSaves = useRef(0);
   const loadVersion = useRef(0);
+  const [activeScenes, setActiveScenes] = useState<Record<string, string>>({});
+  const reviewViews = useRef(new Map<string, ReviewView>());
+  const reviewView = project ? reviewViews.current.get(project.id) || createReviewView() : undefined;
+  if (project && reviewView) reviewViews.current.set(project.id, reviewView);
   const { history, refresh: refreshHistory } = useEditorHistory();
   const selectProject = (value: ProjectData | null) => { history.reset(value?.id || null); projectRef.current = value; setProject(value); };
   const storageStatus = saveError ? "저장 실패 · 확인 필요" : saveCount ? "변경사항 저장 중…"
@@ -147,8 +153,9 @@ function Studio() {
       catch (error) { setNotice((error as Error).message); selectProject(null); setStep(0); return; }
     }
     selectProject(saved);
+    if (saved && location.sceneId) setActiveScenes(previous => ({ ...previous, [saved.id]: location.sceneId! }));
     setStep(location.step > 1 && !saved ? 0 : location.step);
-  });
+  }, step === 5 && project ? activeScenes[project.id] : undefined);
 
   useEffect(() => {
     void reloadProjects();
@@ -323,6 +330,14 @@ function Studio() {
     void persist(applyGeneratedNarration(current, request), { base: current, label: "AI 내레이션 적용", narration: true });
   };
 
+  const openReviewScene = (sceneId: string) => {
+    if (!project) return;
+    const current = latestProjects.current.get(project.id) || project;
+    if (!current.scenes.some(scene => scene.id === sceneId)) { setNotice("이 장면이 변경되었습니다. 최신 작업 보드에서 다시 선택해 주세요."); return; }
+    setActiveScenes(previous => ({ ...previous, [project.id]: sceneId }));
+    setStep(5);
+  };
+
   const travelHistory = (direction: "undo" | "redo") => {
     const selected = projectRef.current;
     if (!selected) return;
@@ -405,9 +420,9 @@ function Studio() {
           {step === 2 && project && <ParseReview project={project} onChange={persist} onReparse={reparseSource} onError={setNotice} />}
           {step === 3 && project && <Preflight project={project} />}
           {step === 4 && project && <AssetStudio title="인물 기준 이미지" eyebrow="CHARACTER ANCHOR" description="얼굴 일관성을 위한 기준 이미지입니다. 업로드한 이미지가 있으면 생성 단계를 건너뛰어도 됩니다." asset={project.anchor} project={project} kind="anchor" onChange={(anchor, options) => persist({ ...project, anchor }, options)} />}
-          {step === 5 && project && <SceneStudio project={project} onChange={updateScene} onProjectChange={persist} onTimingChange={applyNarrationTiming} onGeneratedNarration={selectGeneratedNarration} onMove={changeSceneOrder} onSplit={divideScene} onMerge={combineScene} />}
+          {step === 5 && project && <><div className="review-return-actions">{reviewView?.anchor && <button type="button" className="btn ghost" onClick={() => { reviewView.returning = true; setStep(7); }}><ArrowLeft size={15} /> 작업 보드로 돌아가기</button>}</div><SceneStudio key={project.id} project={project} activeSceneId={activeScenes[project.id]} onActiveSceneChange={id => setActiveScenes(previous => ({ ...previous, [project.id]: id }))} onChange={updateScene} onProjectChange={persist} onTimingChange={applyNarrationTiming} onGeneratedNarration={selectGeneratedNarration} onMove={changeSceneOrder} onSplit={divideScene} onMerge={combineScene} /></>}
           {step === 6 && project && <AssetStudio title="썸네일 만들기" eyebrow="THUMBNAIL" description="대표 이미지를 선택하세요. 선택한 썸네일은 영상 마지막 인물 이름 화면의 배경에도 사용됩니다." asset={project.thumbnail} project={project} kind="thumbnail" onChange={(thumbnail, options) => persist({ ...project, thumbnail }, options)} />}
-          {step === 7 && project && <ImageReview project={project} />}
+          {step === 7 && project && <ImageReview key={project.id} project={project} view={reviewView!} onOpenScene={openReviewScene} />}
           {step === 8 && project && <Complete project={project} onDownload={() => download(project)} />}
         </section>
 
@@ -534,21 +549,11 @@ function Preflight({ project }: { project: ProjectData }) {
   </div>;
 }
 
-function ImageReview({ project }: { project: ProjectData }) {
+function ImageReview({ project, view, onOpenScene }: { project: ProjectData; view: ReviewView; onOpenScene: (sceneId: string) => void }) {
   const errors = completionErrors(project);
   return <div className="page"><PageHeading eyebrow="FINAL IMAGE REVIEW" title="전체 장면을 한 번 더 확인하세요" text="Scene 순서와 핵심 업적 장면, 썸네일을 검토한 뒤 MP4를 만듭니다." />
+    <SceneReviewBoard project={project} view={view} onOpenScene={onOpenScene} />
     <FullVideoPreview project={project} />
-    <div className="review-image-grid">{orderedScenes(project).map((scene) => {
-      const image = scene.candidates.find((candidate) => candidate.id === scene.selected_candidate_id);
-      const intro = image?.media_type === "video" ? resolveVideoIntroImage(scene) : undefined;
-      const support = scene.support_candidates?.find((candidate) => candidate.id === scene.support_selected_candidate_id);
-      return <div className="panel review-image-card" key={scene.id}>
-        {image ? <><img src={intro?.preview_url || image.preview_url} alt={`${scene.title} 첫 화면`} /><small className={image.media_type === "video" ? "video-candidate-badge" : ""}>{intro ? "이미지 → 동영상" : image.media_type === "video" ? `동영상 · ${image.duration_sec?.toFixed(1)}초` : "이미지"}</small></> : <div className="candidate-empty">장면 미선택</div>}
-        <strong>Scene {scene.number} · {scene.title}</strong>
-        {support && <div className="review-support"><img src={support.preview_url} alt={`${scene.title} 보조 이미지`} /><small>후반부 보조 이미지</small></div>}
-        {isCoreScene(project, scene) && <em>★ 핵심 업적</em>}
-      </div>;
-    })}</div>
     <div className="panel"><h3>썸네일</h3>{project.thumbnail.candidates.find((candidate) => candidate.id === project.thumbnail.selected_candidate_id) ? <img className="review-thumbnail" src={project.thumbnail.candidates.find((candidate) => candidate.id === project.thumbnail.selected_candidate_id)!.preview_url} alt="선택 썸네일" /> : <p>선택된 썸네일이 없습니다.</p>}</div>
     {errors.length > 0 && <div className="error-banner"><strong>완료 전 확인할 항목</strong><ul>{errors.map((error, index) => <li key={index}>{error}</li>)}</ul></div>}
   </div>;
@@ -640,16 +645,19 @@ function BackgroundMusicPanel({ project, onChange }: { project: ProjectData; onC
   return <div className="panel background-music-panel"><div className="music-head"><Music2 size={20} /><div><strong>영상 배경음악</strong><small>음악 한 곡이 영상 전체에 반복됩니다. 장면마다 아래에서 볼륨을 조절하세요.</small></div><input ref={input} className="file-input" type="file" accept=".mp3,.wav,.m4a,.mp4,audio/mpeg,audio/wav,audio/mp4,video/mp4" aria-label="배경음악 파일 선택" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void upload(file); }} /><button className="btn ghost" disabled={busy} onClick={() => input.current?.click()}>{busy ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />}{project.background_music ? "음악 교체" : "음악 업로드"}</button></div>{project.background_music && <div className="music-file"><span>{project.background_music.name}</span>{previewUrl && <audio controls preload="metadata" src={previewUrl} aria-label="배경음악 미리듣기" />}<button className="btn ghost" disabled={busy} onClick={remove}><Trash2 size={15} /> 제거</button></div>}<small className="music-hint">MP3·WAV·M4A·MP4(MPEG-4), 100MB·15분 이하 · 사용 권한이 있는 음악을 선택해 주세요.</small>{error && <div className="error-banner">{error}</div>}</div>;
 }
 
-function SceneStudio({ project, onChange, onProjectChange, onTimingChange, onGeneratedNarration, onMove, onSplit, onMerge }: { project: ProjectData; onChange: (scene: Scene, options?: EditOptions) => void; onProjectChange: (project: ProjectData) => Promise<void>; onTimingChange: (request: TimingRequest) => void; onGeneratedNarration: (request: GeneratedNarrationRequest) => void; onMove: (projectId: string, sceneId: string, direction: -1 | 1) => void; onSplit: (projectId: string, sceneId: string, captionId: string) => void; onMerge: (projectId: string, sceneId: string, nextId: string) => void }) {
+function SceneStudio({ project, activeSceneId, onActiveSceneChange, onChange, onProjectChange, onTimingChange, onGeneratedNarration, onMove, onSplit, onMerge }: { project: ProjectData; activeSceneId?: string; onActiveSceneChange: (id: string) => void; onChange: (scene: Scene, options?: EditOptions) => void; onProjectChange: (project: ProjectData) => Promise<void>; onTimingChange: (request: TimingRequest) => void; onGeneratedNarration: (request: GeneratedNarrationRequest) => void; onMove: (projectId: string, sceneId: string, direction: -1 | 1) => void; onSplit: (projectId: string, sceneId: string, captionId: string) => void; onMerge: (projectId: string, sceneId: string, nextId: string) => void }) {
   const scenes = orderedScenes(project);
-  const [active, setActive] = useState(scenes[0]?.id || "");
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [supportBusy, setSupportBusy] = useState(false);
   const [videoBusy, setVideoBusy] = useState(false);
   const videoInput = useRef<HTMLInputElement>(null);
-  const scene = scenes.find((item) => item.id === active) || scenes[0];
+  const scene = scenes.find((item) => item.id === activeSceneId) || scenes[0];
+  useLayoutEffect(() => { window.scrollTo({ top: 0, behavior: "instant" }); }, []);
+  useLayoutEffect(() => {
+    if (scene && scene.id !== activeSceneId) onActiveSceneChange(scene.id);
+  }, [scene?.id, activeSceneId]);
   if (!scene) return <div className="empty-state"><Circle size={28} /><h3>분석된 장면이 없습니다</h3><p>파싱 확인 단계로 돌아가 Scene 항목을 확인해 주세요.</p></div>;
   const fullPrompt = composeScenePrompt(project, scene);
   const generate = async () => {
@@ -713,7 +721,7 @@ function SceneStudio({ project, onChange, onProjectChange, onTimingChange, onGen
   const introImage = selectedVideo ? resolveVideoIntroImage(scene) : undefined;
   const neighbors = [scenes[position - 1], scenes[position + 1]].filter((item): item is Scene => !!item);
   const switchScene = (id: string) => {
-    setActive(id);
+    onActiveSceneChange(id);
     setCopied(false);
     window.scrollTo({ top: 0, behavior: "auto" });
   };
