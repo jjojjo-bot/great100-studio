@@ -1,4 +1,5 @@
 import { DEFAULT_STYLE } from "./parser";
+import { editorIdentityErrors, isCoreScene, readEditorProject } from "./editor-format";
 import type { AppDataV2, ImageMotion, ProjectData, Scene, VisualAsset } from "./types";
 
 export interface QualityReport {
@@ -30,6 +31,10 @@ export function extractAppData(input: string): unknown {
 }
 
 export function validateAppData(value: unknown): QualityReport {
+  return validateData(value);
+}
+
+function validateData(value: unknown, edited = false, coreIds?: string[]): QualityReport {
   const root = record(value);
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -60,9 +65,9 @@ export function validateAppData(value: unknown): QualityReport {
   if (!scenes.length) errors.push("scenes가 비어 있습니다.");
   const fields = ["id", "narration", "scene_description", "visual_type", "shot_type", "location", "main_subject", "main_action", "image_prompt", "motion"];
   scenes.forEach((scene, index) => {
-    const expected = `scene_${String(index + 1).padStart(2, "0")}`;
-    if (scene.id !== expected) errors.push(`${expected}이 누락되었거나 순서가 잘못되었습니다.`);
-    if (scene.order !== index + 1) errors.push(`${expected}의 order는 ${index + 1}이어야 합니다.`);
+    const expected = edited ? String(scene.id || `Scene ${index + 1}`) : `scene_${String(index + 1).padStart(2, "0")}`;
+    if (!edited && scene.id !== expected) errors.push(`${expected}이 누락되었거나 순서가 잘못되었습니다.`);
+    if (!edited && scene.order !== index + 1) errors.push(`${expected}의 order는 ${index + 1}이어야 합니다.`);
     textFields(scene, fields, expected, errors);
     if (root.schema_version === "2.0" && !nonempty(scene.subtitle)) errors.push(`${expected}.subtitle 값이 없습니다.`);
     if (root.schema_version === "2.1" && scene.subtitle != null && typeof scene.subtitle !== "string") errors.push(`${expected}.subtitle은 문자열 또는 비어 있는 값이어야 합니다.`);
@@ -95,10 +100,11 @@ export function validateAppData(value: unknown): QualityReport {
       }
     }
   });
-  if (nonempty(core.scene_id)) {
-    const target = scenes.find((scene) => scene.id === core.scene_id);
-    if (!target || !nonempty(target.image_prompt) || !nonempty(target.visual_type) || !nonempty(target.scene_description)) errors.push(`핵심 업적 '${String(core.title || "")}'이 실제 이미지 Scene에 연결되지 않았습니다.`);
-  }
+  const coreTargets = coreIds ?? (nonempty(core.scene_id) ? [core.scene_id] : []);
+  if (!coreTargets.length || coreTargets.some(id => {
+    const target = scenes.find(scene => scene.id === id);
+    return !target || !nonempty(target.image_prompt) || !nonempty(target.visual_type) || !nonempty(target.scene_description);
+  })) errors.push(`핵심 업적 '${String(core.title || "")}'이 실제 이미지 Scene에 연결되지 않았습니다.`);
   const unique = (field: string) => new Set(scenes.map((scene) => String(scene[field] || "").trim().toLocaleLowerCase()).filter(Boolean)).size;
   const name = String(person.name || "").replace(/\s/g, "");
   const withoutProtagonist = scenes.filter((scene) => {
@@ -107,7 +113,7 @@ export function validateAppData(value: unknown): QualityReport {
     return !!name && !subject.includes(name) && !prompt.includes(name);
   }).length;
   const duration = number(scenes.at(-1)?.end_sec) ? scenes.at(-1)!.end_sec as number : 0;
-  const metrics = { visualTypes: unique("visual_type"), shotTypes: unique("shot_type"), locations: unique("location"), withoutProtagonist, coreScenes: scenes.filter((scene) => scene.id === core.scene_id).length, duration, sceneCount: scenes.length };
+  const metrics = { visualTypes: unique("visual_type"), shotTypes: unique("shot_type"), locations: unique("location"), withoutProtagonist, coreScenes: scenes.filter((scene) => coreTargets.includes(String(scene.id))).length, duration, sceneCount: scenes.length };
   if (scenes.length < 14 || scenes.length > 18) warnings.push(`Scene이 ${scenes.length}개입니다. 권장 범위는 14~18개입니다.`);
   if (duration < 270 || duration > 300) warnings.push(`현재 영상 길이는 ${duration}초입니다. 권장 범위는 270~300초입니다.`);
   if (number(video.target_duration_sec) && (video.target_duration_sec < 270 || video.target_duration_sec > 300)) warnings.push(`목표 영상 길이는 ${video.target_duration_sec}초입니다. 권장 범위는 270~300초입니다.`);
@@ -194,33 +200,39 @@ export function createV2ProjectDraft(episode: number, category: string, sourceTe
     caption: source.subtitle || "", subtitle: source.subtitle || "", captions: source.captions?.map((caption) => ({ ...caption })), motion: imageMotion(source.motion), prompt: source.image_prompt,
     prompt_history: [{ prompt: source.image_prompt, created_at: now }], candidates: [], status: "idle",
   }));
-  return {
+  return readEditorProject({
     schema_version: data.schema_version, id: crypto.randomUUID(), episode, person, category,
     folder_name: `${String(episode).padStart(3, "0")}_${person.replace(/[\\/:*?"<>|]/g, "_")}`,
-    project_path: "", source_text: sourceText, source: data, style_guide: DEFAULT_STYLE,
+    project_path: "", source_text: sourceText, source: structuredClone(data), style_guide: DEFAULT_STYLE,
     character_profile: { ...profile, clothing: profile.outfit, mood: profile.impression, description },
     anchor: asset(`${description}. 인물 얼굴 일관성을 위한 기준 이미지. 정면 또는 반신, 단순한 배경.`),
     scenes, thumbnail: asset(data.thumbnail.prompts[data.thumbnail.recommended_index]),
     ending_message: data.ending.message, created_at: now, updated_at: now,
     app_state: { warnings: report.warnings, selected_scene_images: {} },
-  };
+  });
 }
 
 export function reportForProject(project: ProjectData): QualityReport {
-  if (project.schema_version === 1 || !project.source) return { errors: [], warnings: ["Legacy v1 프로젝트입니다. 기존 흐름으로 계속 사용할 수 있습니다."], metrics: { visualTypes: 0, shotTypes: 0, locations: 0, withoutProtagonist: 0, coreScenes: 0, duration: 0, sceneCount: project.scenes.length } };
+  const identityErrors = editorIdentityErrors(project);
+  const empty = { errors: identityErrors, warnings: [] as string[], metrics: { visualTypes: 0, shotTypes: 0, locations: 0, withoutProtagonist: 0, coreScenes: 0, duration: 0, sceneCount: project.scenes.length } };
+  if (project.schema_version === 1) return { ...empty, warnings: ["Legacy v1 프로젝트입니다. 기존 흐름으로 계속 사용할 수 있습니다."] };
+  if (!project.source) return { ...empty, errors: [...identityErrors, "원본 APP_DATA가 없습니다. 원본 제작안으로 새 프로젝트를 만들어 주세요."] };
   const data: AppDataV2 = { ...project.source, scenes: project.scenes.map((scene) => ({
-    id: scene.source_scene_id || scene.id, order: scene.number, start_sec: scene.start_sec as number, end_sec: scene.end_sec as number,
+    id: scene.id, order: scene.number, start_sec: scene.start_sec as number, end_sec: scene.end_sec as number,
     narration: scene.narration as string, scene_description: scene.scene_description as string,
     visual_type: scene.visual_type as string, shot_type: scene.shot_type as string, location: scene.location as string,
     main_subject: scene.main_subject as string, main_action: scene.main_action as string,
     image_prompt: scene.prompt, support_image_prompt: scene.support_image_prompt ?? null,
     subtitle: scene.subtitle ?? scene.caption as string, captions: scene.captions, motion: scene.motion || "auto",
   })) };
-  return validateAppData(data);
+  const report = validateData(data, true, project.scenes.filter(scene => isCoreScene(project, scene)).map(scene => scene.id));
+  if (Array.isArray(project.editor?.core_scene_ids) && project.editor.core_scene_ids.some(id => !project.scenes.some(scene => scene.id === id))) identityErrors.push("핵심 업적의 편집 장면 연결이 존재하지 않습니다.");
+  for (const scene of project.scenes) if (Number.isFinite(scene.start_sec) && Number.isFinite(scene.end_sec) && Math.abs((scene.end_sec! - scene.start_sec!) - (scene.duration ?? 10)) > 0.001) identityErrors.push(`Scene ${scene.number}의 장면 길이와 시작·종료 시간이 일치하지 않습니다.`);
+  return { ...report, errors: [...identityErrors, ...report.errors] };
 }
 
 export function completionErrors(project: ProjectData): string[] {
-  if (project.schema_version === 1) return [];
+  if (project.schema_version === 1) return editorIdentityErrors(project);
   const errors = reportForProject(project).errors;
   if (project.schema_version === "2.0") errors.push("Legacy project — captions missing. v2.1 데이터로 새 프로젝트를 만들어 주세요.");
   for (const scene of project.scenes) if (!scene.selected_candidate_id) errors.push(`${scene.source_scene_id || scene.id} 메인 이미지가 선택되지 않았습니다.`);

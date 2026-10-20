@@ -1,4 +1,6 @@
 import { cloudAccessToken, getCloudSession, type CloudSession } from "./cloud-session";
+import { assertEditorWrite, readEditorProject } from "./editor-format";
+import { withFullImagePrompts } from "./prompts";
 import type { ImageCandidate, ProjectData } from "./types";
 
 interface ProjectRow { id: string; owner_id: string; data: ProjectData; version: number }
@@ -83,6 +85,9 @@ export async function refreshCloudPreviews(project: ProjectData): Promise<Projec
 }
 
 function databaseError(error: { code?: string; message?: string }): Error {
+  if (error.message?.includes("PROJECT_EDITOR_VERSION")) return new Error("저장된 프로젝트의 편집 형식이 더 최신입니다. 앱을 새로고침하고 최신 작업을 다시 열어 주세요.");
+  if (error.message?.includes("PROJECT_SOURCE_IMMUTABLE")) return new Error("원본 제작안은 변경할 수 없습니다. 수정한 제작안은 새 프로젝트로 만들어 주세요.");
+  if (error.code === "PGRST202") return new Error("편집 형식 저장 설정이 필요합니다. DB의 편집 호환성 업데이트를 적용해 주세요.");
   if (error.code === "40001" || error.message?.includes("PROJECT_CONFLICT")) return new Error("다른 PC나 탭에서 이 프로젝트가 수정되었습니다. 현재 편집본을 ZIP으로 보관한 뒤 최신 작업을 다시 열어 주세요.");
   if (["PGRST205", "PGRST202", "42P01", "42883"].includes(error.code || "")) return new Error("계정 저장 설정이 아직 완료되지 않았습니다. DB 설치 안내를 확인해 주세요.");
   return new Error("계정에 저장하지 못했습니다. 연결 상태를 확인한 뒤 다시 시도해 주세요.");
@@ -91,7 +96,7 @@ function databaseError(error: { code?: string; message?: string }): Error {
 function versionKey(context: CloudSession, id: string): string { return `${context.userId}:${id}`; }
 
 function rowProject(row: ProjectRow): ProjectData {
-  return { ...row.data, cloud_owner_id: row.owner_id, cloud_version: row.version };
+  return readEditorProject({ ...row.data, cloud_owner_id: row.owner_id, cloud_version: row.version });
 }
 
 export async function listCloudProjects(): Promise<ProjectData[]> {
@@ -113,6 +118,8 @@ export async function nextCloudEpisode(): Promise<number> {
 }
 
 export async function createCloudProject(draft: ProjectData): Promise<ProjectData> {
+  assertEditorWrite(draft);
+  draft = readEditorProject(draft);
   const context = requireContext(draft);
   const { data: episode, error } = await context.client.rpc("great100_reserve_episode");
   if (error) throw databaseError(error);
@@ -125,12 +132,14 @@ export async function createCloudProject(draft: ProjectData): Promise<ProjectDat
 
 // Serialize writes per account/project so normal rapid typing cannot race its own version.
 export async function saveCloudProject(project: ProjectData): Promise<void> {
+  assertEditorWrite(project);
   const context = requireContext(project);
-  const snapshot = structuredClone(project);
+  const snapshot = withFullImagePrompts(structuredClone(readEditorProject(project)));
   const key = versionKey(context, project.id);
   const previous = queues.get(key) || Promise.resolve();
   const task = previous.then(async () => {
     await cloudAccessToken(context);
+    assertEditorWrite(project, savedProjects.get(key));
     const expected = versions.get(key) ?? snapshot.cloud_version ?? 0;
     for (const candidate of candidates(snapshot)) {
       if (!candidate.storage_key && candidate.media_type !== "video") {
@@ -147,7 +156,7 @@ export async function saveCloudProject(project: ProjectData): Promise<void> {
     }
     // Never persist temporary signed URLs or UI-only revision fields in JSONB.
     const { cloud_owner_id: _owner, cloud_version: _version, ...data } = snapshot;
-    const result = await context.client.rpc("great100_save_project", { p_id: snapshot.id, p_data: data, p_expected_version: expected });
+    const result = await context.client.rpc("great100_save_editor_project", { p_id: snapshot.id, p_data: data, p_expected_version: expected });
     if (result.error) throw databaseError(result.error);
     const row = (result.data as ProjectRow[])[0];
     if (!row) throw new Error("저장 결과를 확인하지 못했습니다.");

@@ -78,10 +78,8 @@ export function buildSceneSegment(project: ProjectData, scene: Scene, index: num
 
 export function buildVideoPlan(project: ProjectData): VideoSegment[] {
   if (!project.scenes.length) throw new Error("영상으로 만들 Scene이 없습니다.");
-  if (project.schema_version === "2.1") {
-    const errors = reportForProject(project).errors;
-    if (errors.length) throw new Error(errors[0]);
-  }
+  const errors = reportForProject(project).errors;
+  if (errors.length) throw new Error(errors[0]);
   const scenes: VideoSegment[] = [...project.scenes].sort((a, b) => a.number - b.number).map((scene, index) => buildSceneSegment(project, scene, index));
   const thumbnail = project.thumbnail.candidates.find((candidate) => candidate.id === project.thumbnail.selected_candidate_id);
   if (project.thumbnail.selected_candidate_id && !thumbnail) throw new Error("선택한 썸네일 이미지를 찾지 못했습니다.");

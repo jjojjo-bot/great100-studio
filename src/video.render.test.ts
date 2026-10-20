@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createProjectDraft } from "./parser";
 import { SAMPLE_WORK_TEXT } from "./sample";
+import { editorProject } from "../tests/fixtures/editor-project";
 
 const calls = vi.hoisted(() => ({ audioBuffers: [] as Float32Array[], audioTracks: 0, videoFrames: 0, narrationBlob: null as Blob | null }));
 
@@ -87,8 +88,8 @@ describe("MP4 background music rendering", () => {
       measureText: (text: string) => ({ width: text.length * 10 }),
     }) };
     vi.stubGlobal("document", { createElement: () => canvas });
-    const project = createProjectDraft(2, "이순신", "장군 · 지도자", SAMPLE_WORK_TEXT);
-    project.schema_version = "2.1";
+    const project = editorProject();
+    project.person = "이순신";
     project.scenes = [project.scenes[0]];
     project.scenes[0].duration = 1;
     project.scenes[0].start_sec = 0;
@@ -101,6 +102,8 @@ describe("MP4 background music rendering", () => {
     ];
     project.scenes[0].candidates = [{ id: "one", path: "image.png", preview_url: "data:image/png;base64,a", created_at: "now", mode: "uploaded" }];
     project.scenes[0].selected_candidate_id = "one";
+    project.editor!.core_scene_ids = [project.scenes[0].id];
+    project.scenes[0].captions!.forEach((block, index) => { block.id = `caption-${index}`; });
     project.ending_message = "";
     await renderProjectMp4(project);
     expect(drawn).toContain("오늘의 인물");

@@ -51,7 +51,7 @@ describe("project export", () => {
     project.scenes[0].selected_candidate_id = candidate.id;
     const bytes = new Uint8Array([0, 0, 0, 12, 102, 116, 121, 112, 1, 2, 3, 4]);
     await listProjects();
-    const db = await openDB("great100-studio", 5);
+    const db = await openDB("great100-studio", 6);
     await db.put("media", { id: `${project.id}:scene-video:clip`, blob: new Blob([bytes], { type: "video/mp4" }) });
     const zip = await JSZip.loadAsync(await (await buildProjectZip(project)).arrayBuffer());
     const folder = `${project.folder_name}/03_images/scene01/`;
@@ -169,7 +169,7 @@ describe("project deletion", () => {
     removed.project_path = await createProjectOnDisk(removed);
     await saveProject(removed);
     await saveRenderedVideo(removed, new Blob(["test"], { type: "video/mp4" }));
-    const db = await openDB("great100-studio", 5);
+    const db = await openDB("great100-studio", 6);
     const recordingKey = `${removed.id}:narration:${removed.scenes[0].id}`;
     await db.put("audio", { id: recordingKey, blob: new Blob(["voice"]) });
     const kept = createProjectDraft(22, "보존 시험", "장군 · 지도자", SAMPLE_WORK_TEXT);
@@ -196,7 +196,7 @@ describe("candidate deletion", () => {
     scene.candidates = [clip];
     await saveProject(project);
     await saveRenderedVideo(project, new Blob(["render"], { type: "video/mp4" }));
-    const db = await openDB("great100-studio", 5);
+    const db = await openDB("great100-studio", 6);
     const removedKey = `${project.id}:scene-video:${clip.id}`;
     const keptKey = `${project.id}:scene-video:other`;
     await db.put("media", { id: removedKey, blob: new Blob(["remove"]) });
@@ -214,7 +214,7 @@ describe("video cache", () => {
     vi.stubGlobal("window", {});
     const project = createProjectDraft(25, "영상 시험", "장군 · 지도자", SAMPLE_WORK_TEXT);
     project.project_path = await createProjectOnDisk(project);
-    const db = await openDB("great100-studio", 5);
+    const db = await openDB("great100-studio", 6);
     await db.put("videos", { id: project.id, updated_at: project.updated_at, blob: new Blob(["old"], { type: "video/mp4" }) });
     expect(await getRenderedVideo(project)).toBeNull();
     await saveRenderedVideo(project, new Blob(["new"], { type: "video/mp4" }));

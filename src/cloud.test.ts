@@ -3,7 +3,8 @@ import type { Session, SupabaseClient } from "@supabase/supabase-js";
 import { createProjectDraft } from "./parser";
 import { SAMPLE_WORK_TEXT } from "./sample";
 import { setCloudSession } from "./cloud-session";
-import { cloudContext, cloudFileUrls, saveCloudProject, saveCloudRenderedVideo, uploadCloudFile } from "./cloud";
+import { cloudContext, cloudFileUrls, listCloudProjects, saveCloudProject, saveCloudRenderedVideo, uploadCloudFile } from "./cloud";
+import { editorProject } from "../tests/fixtures/editor-project";
 
 const userId = "alice";
 const session = { user: { id: userId }, access_token: "alice-token" } as Session;
@@ -31,6 +32,29 @@ it("serializes rapid saves against consecutive server revisions", async () => {
   const draft = project();
   await Promise.all([saveCloudProject(draft), saveCloudProject({ ...draft, person: "수정 1" }), saveCloudProject({ ...draft, person: "수정 2" })]);
   expect(revision).toBe(3); expect(rpc.mock.calls[2][1].p_data.person).toBe("수정 2");
+});
+
+it("round-trips editor metadata and unknown fields through the version-aware JSONB RPC", async () => {
+  const draft = { ...editorProject(), cloud_owner_id: userId, cloud_version: 0, extra: { keep: true } };
+  rpc.mockResolvedValue({ data: [{ version: 1 }], error: null });
+  await saveCloudProject(draft);
+  expect(rpc.mock.calls[0][0]).toBe("great100_save_editor_project");
+  const stored = rpc.mock.calls[0][1].p_data;
+  const query = { select: () => query, eq: () => query, order: async () => ({ data: [{ id: draft.id, owner_id: userId, data: stored, version: 1 }], error: null }) };
+  from.mockReturnValue(query);
+  const [reopened] = await listCloudProjects();
+  expect(reopened).toMatchObject({ editor_version: 1, editor: draft.editor, extra: draft.extra, source: draft.source });
+  expect(reopened.scenes[0].captions).toEqual(draft.scenes[0].captions);
+  await expect(saveCloudProject({ ...draft, editor_version: 2 })).rejects.toThrow("새로운 편집 형식");
+  await expect(saveCloudProject({ ...draft, source_text: "다른 제작안" })).rejects.toThrow("원본 제작안");
+  expect(rpc).toHaveBeenCalledTimes(1);
+});
+
+it("requires the editor migration instead of falling back to the legacy save RPC", async () => {
+  rpc.mockResolvedValue({ data: null, error: { code: "PGRST202" } });
+  await expect(saveCloudProject(project())).rejects.toThrow("편집 형식 저장 설정");
+  expect(rpc).toHaveBeenCalledTimes(1);
+  expect(rpc.mock.calls[0][0]).toBe("great100_save_editor_project");
 });
 
 it("stops queued edits after another PC wins a revision conflict", async () => {

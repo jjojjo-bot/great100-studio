@@ -7,6 +7,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 use uuid::Uuid;
+mod editor_format;
 
 const IMAGE_MODEL: &str = "gpt-image-2.5-flare";
 
@@ -117,6 +118,7 @@ fn create_project(project: ProjectInput) -> Result<String, String> {
         map.insert("source_text".into(), Value::String(project.source_text));
         map.insert("project_path".into(), Value::String(relative.clone()));
     }
+    editor_format::check_write(&value, None)?;
     write_json(&project_dir.join("project_data.json"), &value)?;
     Ok(relative)
 }
@@ -155,8 +157,20 @@ fn save_project(project: Value) -> Result<(), String> {
         .and_then(Value::as_str)
         .ok_or("project_path가 없습니다.")?;
     let dir = safe_project_path(project_path)?;
+    let data_path = dir.join("project_data.json");
+    let stored = if data_path.exists() {
+        Some(serde_json::from_slice::<Value>(&fs::read(&data_path).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?)
+    } else { None };
+    editor_format::check_write(&project, stored.as_ref())?;
     fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
-    write_json(&dir.join("project_data.json"), &project)
+    if let Some(previous) = stored.as_ref() {
+        let backup = dir.join("project_data.pre-editor-v1.json");
+        if editor_format::version(previous)? == 0 && editor_format::version(&project)? >= 1 && !backup.exists() {
+            fs::copy(&data_path, backup).map_err(|error| error.to_string())?;
+        }
+    }
+    write_json(&data_path, &project)
 }
 
 #[tauri::command]

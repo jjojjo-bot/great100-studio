@@ -22,7 +22,7 @@ vi.mock("./cloud", () => ({
 beforeEach(async () => {
   vi.stubGlobal("window", {}); vi.clearAllMocks(); mock.saved.clear();
   await listLocalProjects();
-  const db = await openDB("great100-studio", 5);
+  const db = await openDB("great100-studio", 6);
   for (const store of ["projects", "audio", "media", "videos", "settings"]) await db.clear(store);
   db.close();
   mock.create.mockImplementation(async draft => {
@@ -46,7 +46,7 @@ async function seed() {
   project.scenes[0].support_candidates = [image("support")];
   project.background_music = { name: "music.mp3", mime_type: "audio/mpeg", path: `${project.project_path}/01_source/music.mp3` };
   project.scenes[0].narration_audio = { name: "voice.wav", mime_type: "audio/wav", duration_sec: 2, path: `${project.project_path}/03_images/scene01/voice.wav` };
-  const db = await openDB("great100-studio", 5);
+  const db = await openDB("great100-studio", 6);
   await db.put("projects", project);
   await db.put("audio", { id: project.id, blob: new Blob(["music"], { type: "audio/mpeg" }) });
   await db.put("audio", { id: `${project.id}:narration:${project.scenes[0].id}`, blob: new Blob(["voice"], { type: "audio/wav" }) });
@@ -66,7 +66,7 @@ it("copies every media kind into the current account and keeps the local origina
   expect(migrated.scenes[0].candidates[0]).toMatchObject({ storage_key: expect.any(String), preview_storage_key: expect.any(String) });
   expect(migrated.background_music?.storage_key).toBeTruthy(); expect(migrated.scenes[0].narration_audio?.storage_key).toBeTruthy();
   expect(mock.upload).toHaveBeenCalledTimes(7); expect(mock.export).toHaveBeenCalledTimes(1);
-  const db = await openDB("great100-studio", 5);
+  const db = await openDB("great100-studio", 6);
   expect(await db.get("projects", original.id)).toEqual(original);
   expect(await db.count("media")).toBe(1); expect(await db.count("audio")).toBe(2); expect(await db.count("videos")).toBe(1);
   db.close();

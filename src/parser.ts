@@ -1,4 +1,5 @@
 import type { CharacterProfile, ProjectData, Scene, VisualAsset } from "./types";
+import { readEditorProject } from "./editor-format";
 
 export const DEFAULT_STYLE =
   "어린이 역사 교육용 동화 삽화, 현대적이고 따뜻한 그림책형 디지털 일러스트, 지나친 실사 금지, no text, no letters, no watermark, 16:9";
@@ -214,7 +215,7 @@ export function createProjectDraft(episode: number, person: string, category: st
   const now = new Date().toISOString();
   const cleanPerson = (person || parsed.person || "새 인물").trim();
   const profilePrompt = parsed.character_profile.description || `${cleanPerson}, 역사적 복식, 차분하고 믿음직한 표정`;
-  return {
+  return readEditorProject({
     schema_version: 1,
     id: crypto.randomUUID(),
     episode,
@@ -231,5 +232,5 @@ export function createProjectDraft(episode: number, person: string, category: st
     ending_message: parsed.ending_message,
     created_at: now,
     updated_at: now,
-  };
+  });
 }

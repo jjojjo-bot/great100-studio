@@ -57,6 +57,14 @@ it("undoes a continuous text edit, preserves native text shortcuts, and saves re
   await waitFor(() => expect(mock.save.mock.calls.at(-1)![0].scenes[0].caption).toBe("수정한 문장"));
 });
 
+it("keeps an unsupported future-format project on the dashboard without mounting its editor", async () => {
+  project.editor_version = 2;
+  await open();
+  expect(screen.queryByLabelText("장면 1 영상 자막")).toBeNull();
+  expect(screen.getByText(/더 새로운 편집 형식/)).toBeTruthy();
+  expect(mock.save).not.toHaveBeenCalled();
+});
+
 it("keeps late generation results when undoing an edit made during generation", async () => {
   let finish!: (candidates: ImageCandidate[]) => void;
   mock.generate.mockReturnValue(new Promise<ImageCandidate[]>(resolve => { finish = resolve; }));

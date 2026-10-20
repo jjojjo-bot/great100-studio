@@ -7,6 +7,7 @@ export interface PromptRevision {
 }
 
 export interface CaptionBlock {
+  id?: string;
   text: string;
   start_sec: number;
   end_sec: number;
@@ -47,6 +48,7 @@ export interface Scene {
   support_start_sec?: number;
   status: CandidateStatus;
   source_scene_id?: string;
+  source_scene_ids?: string[];
   start_sec?: number;
   end_sec?: number;
   narration?: string;
@@ -101,6 +103,8 @@ export interface VisualAsset {
 
 export interface ProjectData {
   schema_version: 1 | "2.0" | "2.1";
+  editor_version?: number;
+  editor?: { core_scene_ids: string[] };
   id: string;
   episode: number;
   person: string;

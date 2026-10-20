@@ -8,6 +8,7 @@ import { cloudContext, createCloudProject, deleteCloudProject, downloadCloudFile
 import { cloudAccessToken } from "./cloud-session";
 import { detectImageFormat } from "./image-format";
 import { prepareReferenceImage } from "./reference-image";
+import { assertEditorWrite, readEditorProject } from "./editor-format";
 import type { BackgroundMusic, GenerateRequest, ImageCandidate, ProjectData, Scene, SceneNarrationAudio, VisualAsset } from "./types";
 
 export { detectImageFormat } from "./image-format";
@@ -17,7 +18,7 @@ const VIDEO_RENDER_VERSION = 8;
 
 const database = () => new Promise<IDBPDatabase>((resolve, reject) => {
   let blocked = false;
-  openDB("great100-studio", 5, {
+  openDB("great100-studio", 6, {
     blocked() {
       blocked = true;
       reject(new Error("저장소 업데이트를 위해 Great100의 다른 탭을 닫거나 새로고침한 뒤 다시 시도해 주세요."));
@@ -51,7 +52,7 @@ export function setAccessCode(code: string) {
 }
 
 export async function listProjects(): Promise<ProjectData[]> {
-  if (isTauri()) return invoke("list_projects");
+  if (isTauri()) return (await invoke<ProjectData[]>("list_projects")).map(readEditorProject);
   if (cloudContext()) return listCloudProjects();
   return listLocalProjects();
 }
@@ -59,7 +60,7 @@ export async function listProjects(): Promise<ProjectData[]> {
 export async function listLocalProjects(): Promise<ProjectData[]> {
   const db = await database();
   const projects = await db.getAll("projects") as ProjectData[];
-  return projects.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+  return projects.sort((a, b) => b.updated_at.localeCompare(a.updated_at)).map(readEditorProject);
 }
 
 export async function localProjectsForImport(): Promise<ProjectData[]> {
@@ -96,8 +97,8 @@ export async function importLocalProject(localId: string, onProgress: (message: 
     await db.put("settings", { id: saved.id, completed: false }, markerKey);
   }
   if (!saved.migration_pending) { await db.put("settings", { id: saved.id, completed: true }, markerKey); return; }
-  const target: ProjectData = { ...structuredClone(original), id: saved.id, episode: saved.episode, folder_name: saved.folder_name,
-    project_path: saved.project_path, cloud_owner_id: context.userId, cloud_version: saved.cloud_version, migration_pending: true };
+  const target = readEditorProject({ ...structuredClone(original), id: saved.id, episode: saved.episode, folder_name: saved.folder_name,
+    project_path: saved.project_path, cloud_owner_id: context.userId, cloud_version: saved.cloud_version, migration_pending: true });
   const rewrite = (path: string) => path.replace(`${original.project_path}/`, `${target.project_path}/`);
   const existingCandidates = new Map([saved.anchor, saved.thumbnail, ...saved.scenes].flatMap(asset => asset.candidates)
     .concat(saved.scenes.flatMap(scene => scene.support_candidates || [])).map(candidate => [candidate.id, candidate]));
@@ -152,6 +153,8 @@ export async function importLocalProject(localId: string, onProgress: (message: 
 }
 
 export async function createProjectOnDisk(project: ProjectData): Promise<string> {
+  assertEditorWrite(project);
+  project = readEditorProject(project);
   if (isTauri()) return invoke("create_project", { project });
   const path = `projects/${project.folder_name}`;
   const db = await database();
@@ -177,6 +180,8 @@ export async function getNextProjectEpisode(): Promise<number> {
 }
 
 export async function createNumberedProject(draft: ProjectData): Promise<ProjectData> {
+  assertEditorWrite(draft);
+  draft = readEditorProject(draft);
   const desktop = isTauri();
   if (!desktop && cloudContext()) return createCloudProject(withFullImagePrompts(draft));
   const diskProjects = desktop ? await listProjects() : [];
@@ -197,11 +202,26 @@ export async function createNumberedProject(draft: ProjectData): Promise<Project
 }
 
 export async function saveProject(project: ProjectData): Promise<void> {
-  const complete = withFullImagePrompts(project);
+  assertEditorWrite(project);
+  const complete = withFullImagePrompts(readEditorProject(project));
   if (isTauri()) return invoke("save_project", { project: complete });
-  if (cloudContext(project)) return saveCloudProject(complete);
+  if (cloudContext(project)) return saveCloudProject(project);
   const db = await database();
-  await db.put("projects", complete);
+  const tx = db.transaction(["projects", "settings"], "readwrite");
+  try {
+    const stored = await tx.objectStore("projects").get(project.id) as ProjectData | undefined;
+    assertEditorWrite(project, stored);
+    if (stored && !stored.editor_version) {
+      const key = `editor-backup:${project.id}:0`;
+      if (!await tx.objectStore("settings").get(key)) await tx.objectStore("settings").put(stored, key);
+    }
+    await tx.objectStore("projects").put(complete);
+    await tx.done;
+  } catch (error) {
+    try { tx.abort(); } catch { /* A failed IndexedDB request may have aborted it. */ }
+    await tx.done.catch(() => {});
+    throw error;
+  }
 }
 
 export async function deleteProject(project: ProjectData): Promise<string | undefined> {
@@ -212,12 +232,12 @@ export async function deleteProject(project: ProjectData): Promise<string | unde
   if (!saved || saved.project_path !== project.project_path || saved.folder_name !== project.folder_name) {
     throw new Error("삭제할 프로젝트가 저장된 내용과 일치하지 않습니다. 목록을 새로고침해 주세요.");
   }
-  const tx = db.transaction(["projects", "videos", "audio", "media"], "readwrite");
+  const tx = db.transaction(["projects", "videos", "audio", "media", "settings"], "readwrite");
   const audio = tx.objectStore("audio");
   const media = tx.objectStore("media");
   const narrationKeys = (await audio.getAllKeys()).filter((key) => typeof key === "string" && key.startsWith(`${project.id}:narration:`));
   const mediaKeys = (await media.getAllKeys()).filter((key) => typeof key === "string" && key.startsWith(`${project.id}:scene-video:`));
-  await Promise.all([tx.objectStore("projects").delete(project.id), tx.objectStore("videos").delete(project.id), audio.delete(project.id), ...narrationKeys.map((key) => audio.delete(key)), ...mediaKeys.map((key) => media.delete(key))]);
+  await Promise.all([tx.objectStore("projects").delete(project.id), tx.objectStore("videos").delete(project.id), tx.objectStore("settings").delete(`editor-backup:${project.id}:0`), audio.delete(project.id), ...narrationKeys.map((key) => audio.delete(key)), ...mediaKeys.map((key) => media.delete(key))]);
   await tx.done;
 }
 
@@ -554,10 +574,12 @@ export async function exportProjectZip(project: ProjectData): Promise<void> {
 }
 
 export async function buildProjectZip(project: ProjectData, video?: Blob): Promise<Blob> {
+  project = readEditorProject(project);
   const zip = new JSZip();
   const root = zip.folder(project.folder_name)!;
   for (const folder of ["01_source", "02_character", "03_images", "04_thumbnail", "05_exports", "06_logs"]) root.folder(folder);
   root.file("01_source/work_result.txt", project.source_text);
+  if (project.source) root.file("01_source/app_data.json", JSON.stringify(project.source, null, 2));
   if (project.background_music) {
     const music = await getBackgroundMusic(project);
     if (!music) throw new Error("배경음악 파일을 찾지 못했습니다. 다시 업로드해 주세요.");

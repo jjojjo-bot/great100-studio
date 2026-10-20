@@ -7,6 +7,7 @@ const alice = "11111111-1111-4111-8111-111111111111";
 const bob = "22222222-2222-4222-8222-222222222222";
 const project = "33333333-3333-4333-8333-333333333333";
 const migration = readFileSync(new URL("../supabase/migrations/202610190001_cloud_projects.sql", import.meta.url), "utf8");
+const editorMigration = readFileSync(new URL("../supabase/migrations/202610200001_editor_compatibility.sql", import.meta.url), "utf8");
 
 async function asUser(id: string) {
   await db.exec("reset role");
@@ -26,6 +27,8 @@ beforeAll(async () => {
   `);
   await db.exec(migration);
   await db.exec(migration); // Re-running installation must preserve tables and policies.
+  await db.exec(editorMigration);
+  await db.exec(editorMigration);
 }, 30_000);
 afterAll(async () => { await db.close(); });
 
@@ -60,4 +63,25 @@ it("denies anonymous project access", async () => {
   await db.exec("reset role; set role anon");
   await expect(db.query("select * from public.great100_projects")).rejects.toThrow();
   await expect(db.query("select public.great100_reserve_episode()")).rejects.toThrow();
+});
+
+it("backs up legacy data once and blocks old RPCs, including clients echoing the new format field", async () => {
+  await asUser(alice);
+  const id = "44444444-4444-4444-8444-444444444444";
+  const original = { id, episode: 3, person: "세종", source_text: "원본", source: { raw: "원본" }, extra: { retained: true } };
+  await db.query("select * from public.great100_save_project($1,$2::jsonb,0)", [id, JSON.stringify(original)]);
+  const edited = { ...original, editor_version: 1, editor: { core_scene_ids: ["stable-id"] }, person: "편집" };
+  await db.query("select * from public.great100_save_editor_project($1,$2::jsonb,1)", [id, JSON.stringify(edited)]);
+  expect((await db.query<{ data: unknown }>("select data from public.great100_project_backups where project_id=$1", [id])).rows).toEqual([{ data: original }]);
+  await expect(db.query("select * from public.great100_save_project($1,$2::jsonb,2)", [id, JSON.stringify(original)])).rejects.toThrow("PROJECT_EDITOR_VERSION_DOWNGRADE");
+  await expect(db.query("select * from public.great100_save_project($1,$2::jsonb,2)", [id, JSON.stringify(edited)])).rejects.toThrow("PROJECT_EDITOR_VERSION_LEGACY_CLIENT");
+  await expect(db.query("update public.great100_projects set data=$2::jsonb where id=$1", [id, JSON.stringify(original)])).rejects.toThrow("PROJECT_EDITOR_VERSION_DOWNGRADE");
+  await expect(db.query("select * from public.great100_save_editor_project($1,$2::jsonb,2)", [id, JSON.stringify({ ...edited, source_text: "원문 교체" })])).rejects.toThrow("PROJECT_SOURCE_IMMUTABLE");
+  await expect(db.query("select * from public.great100_save_editor_project($1,$2::jsonb,2)", [id, JSON.stringify({ ...edited, editor_version: 2 })])).rejects.toThrow("PROJECT_EDITOR_VERSION_UNSUPPORTED");
+  await db.query("select * from public.great100_save_editor_project($1,$2::jsonb,2)", [id, JSON.stringify({ ...edited, person: "재편집" })]);
+  expect((await db.query<{ data: unknown }>("select data from public.great100_project_backups where project_id=$1", [id])).rows).toEqual([{ data: original }]);
+  await expect(db.query("select * from public.great100_save_editor_project($1,$2::jsonb,2)", [id, JSON.stringify(edited)])).rejects.toThrow("PROJECT_CONFLICT");
+  await asUser(bob);
+  expect((await db.query("select * from public.great100_project_backups")).rows).toEqual([]);
+  await expect(db.query("delete from public.great100_project_backups")).rejects.toThrow();
 });
