@@ -29,7 +29,7 @@ import {
 import { createProjectDraft, DEFAULT_STYLE, parseWorkText } from "./parser";
 import { completionErrors, createV2ProjectDraft, parseAppData, reportForProject } from "./app-data";
 import { composeScenePrompt, composeThumbnailPrompt } from "./prompts";
-import { createNumberedProject, getNextProjectEpisode, deleteCandidateAsset, deleteProject, downloadBlob, exportProjectZip, generateImages, getAccessCode, getBackgroundMusic, getRenderedVideo, importImageCandidates, importSceneVideo, isTauri, listProjects, removeBackgroundMusic, removeSceneNarration, resolveReferenceImage, saveBackgroundMusic, saveProject, saveRenderedVideo } from "./platform";
+import { createNumberedProject, getNextProjectEpisode, deleteCandidateAsset, deleteProject, downloadBlob, exportProjectZip, generateImages, getAccessCode, getBackgroundMusic, getRenderedVideo, importImageCandidates, importSceneVideo, isTauri, listProjects, removeBackgroundMusic, removeSceneNarration, resolveReferenceImage, saveBackgroundMusic, savePreparedNarration, saveProject, saveRenderedVideo } from "./platform";
 import { findCandidate, withoutAssetCandidate, withoutSceneCandidate } from "./candidates";
 import { buildVideoPlan, renderProjectMp4, resolveVideoIntroImage, sceneMusicVolume } from "./video";
 import { SceneNarrationPanel } from "./SceneNarrationPanel";
@@ -38,6 +38,9 @@ import { SceneTimingPanel } from "./SceneTimingPanel";
 import { FullVideoPreview } from "./FullVideoPreview";
 import { SceneReviewBoard } from "./SceneReviewBoard";
 import { SceneImageBatch } from "./SceneImageBatch";
+import { SceneNarrationBatch } from "./SceneNarrationBatch";
+import { useSceneNarrationBatch, type SceneNarrationBatchController } from "./useSceneNarrationBatch";
+import { applyBatchNarration, planBatchNarration, retainBatchNarration, type BatchNarrationRequest, type BatchNarrationResult } from "./scene-narration-batch";
 import { ScenePromptExport, useScenePromptExport, type ScenePromptExportController } from "./ScenePromptExport";
 import { useSceneImageBatch, type SceneImageBatchController } from "./useSceneImageBatch";
 import { attachBatchImage, type BatchImageRequest } from "./scene-image-batch";
@@ -61,7 +64,7 @@ import { proposeNarrationTiming, timingFingerprint, type TimingRequest } from ".
 import { AccountMenu, AuthGate } from "./Auth";
 import { checkCloudStorage, cloudContext } from "./cloud";
 import { mergeProjectChanges } from "./project-changes";
-import { candidateAssetId, collectMediaAssets, prepareMediaProject, visualSelectionFingerprint } from "./media-composition";
+import { candidateAssetId, collectMediaAssets, narrationAssetId, prepareMediaProject, visualSelectionFingerprint } from "./media-composition";
 import { moveScene, orderedScenes } from "./scene-order";
 import { splitBoundaries, splitScene } from "./scene-split";
 import { mergeScene, sceneMergeTarget } from "./scene-merge";
@@ -118,6 +121,7 @@ function Studio() {
   const [importing, setImporting] = useState(false);
   const [restoringImage, setRestoringImage] = useState(false);
   const restoreWorking = useRef(false);
+  const narrationWorking = useRef(false), narrationBatchBusy = useRef(false);
   const saveFailures = useRef(new Map<string, string>());
   const projectRef = useRef(project);
   const latestProjects = useRef(new Map<string, ProjectData>());
@@ -133,7 +137,7 @@ function Studio() {
     : cloud ? storageReady ? "계정에 저장됨" : "계정 저장 연결 확인 필요" : "이 브라우저에 저장됨";
 
   const reloadProjects = async (discardChanges = false) => {
-    if (pendingSaves.current || restoreWorking.current || (saveError && !discardChanges)) { setNotice("저장이 끝난 뒤 새로고침해 주세요. 저장 실패 시 현재 작업의 ZIP을 먼저 보관해 주세요."); return; }
+    if (pendingSaves.current || restoreWorking.current || narrationWorking.current || narrationBatchBusy.current || (saveError && !discardChanges)) { setNotice("저장이 끝난 뒤 새로고침해 주세요. 저장 실패 시 현재 작업의 ZIP을 먼저 보관해 주세요."); return; }
     const version = ++loadVersion.current;
     setStorageLoading(true);
     try {
@@ -269,7 +273,7 @@ function Studio() {
   };
 
   const removeProject = async (item: ProjectData) => {
-    if (batchImages.busy || restoreWorking.current) { setNotice("이미지 연결이 끝나거나 중단된 후 프로젝트를 삭제해 주세요."); return; }
+    if (batchImages.busy || restoreWorking.current || narrationWorking.current || narrationBatchBusy.current) { setNotice("파일 연결이 끝나거나 중단된 후 프로젝트를 삭제해 주세요."); return; }
     const label = `EP. ${String(item.episode).padStart(3, "0")} · ${item.person} (${item.folder_name})`;
     const consequence = isTauri()
       ? "프로젝트 폴더는 projects/.trash로 이동하며 앱 목록에서 사라집니다."
@@ -358,6 +362,37 @@ function Studio() {
     return result.note + (saveFailures.current.has(current.id) ? " 프로젝트 저장은 상단에서 다시 시도해 주세요." : "");
   };
   const batchImages = useSceneImageBatch(project, importBatchImage);
+  const importBatchNarration = async (request: BatchNarrationRequest): Promise<BatchNarrationResult> => {
+    if (narrationWorking.current) throw new Error("다른 녹음을 연결하고 있습니다. 완료 후 다시 시도해 주세요.");
+    narrationWorking.current = true;
+    let saved = request.saved;
+    try {
+      const before = latestProjects.current.get(request.projectId);
+      if (!before) throw new Error("녹음을 연결할 프로젝트가 없습니다.");
+      assertEditorReadable(before);
+      const planned = planBatchNarration(before, request);
+      if (!saved) saved = { originSceneId: request.sceneId, narration: await savePreparedNarration(planned, planned.scenes.find(scene => scene.id === request.sceneId)!, request.prepared) };
+      const current = latestProjects.current.get(request.projectId);
+      if (!current) throw new Error("녹음을 연결할 프로젝트가 없습니다.");
+      const retained = retainBatchNarration(current, saved.originSceneId, saved.narration);
+      saved = { ...saved, narration: retained.narration };
+      let next: ProjectData;
+      try { next = prepareEditorWrite(applyBatchNarration(retained.project, request, saved.narration)); assertEditorWrite(next, current); }
+      catch (cause) {
+        if (retained.project !== current) { const kept = prepareEditorWrite(retained.project); assertEditorWrite(kept, current); await persist(kept, { base: current, history: false }); }
+        return { saved, applied: false, note: `원본은 보관했습니다. ${(cause as Error).message} 저장한 파일은 재시도에서 재사용합니다.` };
+      }
+      await persist(next, { base: current, label: request.timing ? "일괄 녹음 시간 조정·적용" : "내레이션 일괄 배치", narration: true });
+      const latest = latestProjects.current.get(request.projectId)?.scenes.find(scene => scene.id === request.sceneId);
+      const applied = !!latest && narrationAssetId(latest) === saved.narration.asset_id;
+      return { saved, applied, note: (applied ? "녹음을 적용했습니다." : "연결 후 장면이나 녹음이 바뀌었습니다. 최신 연결안을 확인해 주세요.") + (saveFailures.current.has(request.projectId) ? " 프로젝트 저장은 상단에서 다시 시도해 주세요." : "") };
+    } catch (cause) {
+      if (saved) return { saved, applied: false, note: `저장한 녹음을 재사용할 수 있습니다. ${(cause as Error).message}` };
+      throw cause;
+    } finally { narrationWorking.current = false; }
+  };
+  const batchNarrations = useSceneNarrationBatch(project, importBatchNarration);
+  narrationBatchBusy.current = batchNarrations.busy;
   const promptExport = useScenePromptExport(project);
   const mediaCheck = useExportMediaCheck(project);
   const [mediaCheckReturn, setMediaCheckReturn] = useState<{ projectId: string; scrollY: number }>();
@@ -487,18 +522,19 @@ function Studio() {
             <button className="btn ghost" aria-label="실행 취소" title={history.undoLabel ? `${history.undoLabel} 되돌리기 · Ctrl/⌘ Z` : "되돌릴 편집이 없습니다"} disabled={!history.undoLabel} onClick={() => travelHistory("undo")}><Undo2 size={16} /><span>실행 취소</span></button>
             <button className="btn ghost" aria-label="다시 실행" title={history.redoLabel ? `${history.redoLabel} 다시 적용 · Ctrl/⌘ Shift Z` : "다시 적용할 편집이 없습니다"} disabled={!history.redoLabel} onClick={() => travelHistory("redo")}><Redo2 size={16} /><span>다시 실행</span></button>
           </div>}
-          <div className="topbar-actions"><div className="progress-wrap"><span>{progress}%</span><div><i style={{ width: `${progress}%` }} /></div></div><AccountMenu storageStatus={storageStatus} saving={saveCount > 0 || !!saveError || importing || !!deletingId || busy || batchImages.busy || restoringImage} /></div>
+          <div className="topbar-actions"><div className="progress-wrap"><span>{progress}%</span><div><i style={{ width: `${progress}%` }} /></div></div><AccountMenu storageStatus={storageStatus} saving={saveCount > 0 || !!saveError || importing || !!deletingId || busy || batchImages.busy || batchNarrations.busy || restoringImage} /></div>
         </header>
 
         <section className={`workspace${step === 5 ? " scene-workspace-root" : ""}`}>
           {step !== 7 && mediaCheckReturn && mediaCheckReturn.projectId === project?.id && <div className="review-return-actions"><button type="button" className="btn ghost" onClick={() => setStep(7)}><ArrowLeft size={15} /> 자료 점검으로 돌아가기</button></div>}
           {restoringImage && step !== 7 && <div className="panel batch-toolbar" role="status"><LoaderCircle size={15} className="spin" /><span>원본 이미지를 장면 후보에 연결하고 있습니다. 전체 검토에서 결과를 확인할 수 있습니다.</span></div>}
+          {batchNarrations.busy && step !== 7 && <div className="panel batch-toolbar" role="status"><LoaderCircle size={15} className="spin" /><span>녹음을 장면에 연결하고 있습니다. 전체 검토에서 결과를 확인할 수 있습니다.</span><button type="button" className="btn ghost" onClick={batchNarrations.stop}>현재 녹음 완료 후 중단</button></div>}
           {batchImages.busy && step !== 7 && <div className="panel batch-toolbar" role="status"><LoaderCircle size={15} className="spin" /><span>이미지를 장면에 연결하고 있습니다. 전체 검토에서 진행 상태를 확인할 수 있습니다.</span><button type="button" className="btn ghost" onClick={batchImages.stop}>현재 파일 완료 후 중단</button></div>}
           {notice && <div className="toast" onClick={() => setNotice("")}>{notice}</div>}
           {saveError && <div className="panel cloud-setup-panel" role="alert"><strong>계정에 저장하지 못한 변경사항이 있습니다.</strong><p>{saveError}</p><div className="dashboard-actions"><button className="btn ghost" disabled={saveCount > 0} onClick={() => { for (const id of saveFailures.current.keys()) { const item = latestProjects.current.get(id); if (item) void persist(item); } }}>저장 다시 시도</button><button className="btn ghost" onClick={() => { for (const id of saveFailures.current.keys()) { const item = latestProjects.current.get(id); if (item) void download(item); } }}>편집본 ZIP 보관</button><button className="btn ghost" disabled={saveCount > 0} onClick={() => { if (window.confirm("저장하지 못한 현재 편집 내용을 버리고 계정의 최신 작업을 불러올까요?\n\n현재 편집본이 필요하면 먼저 ZIP으로 보관해 주세요.")) void reloadProjects(true); }}>최신 작업 불러오기</button></div></div>}
           {step === 0 && cloud && !storageReady && <div className="panel cloud-setup-panel" role="status"><strong>{storageLoading ? "계정 저장소에 연결하고 있어요." : "계정 저장 연결을 준비하고 있어요."}</strong><p>연결이 완료되면 계정의 프로젝트와 파일을 불러올 수 있습니다. 기존 브라우저 작업은 그대로 보관돼 있습니다.</p><button className="btn ghost" disabled={storageLoading} onClick={() => void reloadProjects()}>연결 다시 확인</button></div>}
           {step === 0 && cloud && storageReady && <LocalProjectImport onImported={reloadProjects} onBusyChange={setImporting} />}
-          {step === 0 && <Dashboard onStart={() => { selectProject(null); setStep(1); }} projects={projects} onOpen={(item) => { const selected = latestProjects.current.get(item.id) || item; try { assertEditorReadable(selected); } catch (error) { setNotice((error as Error).message); return; } selectProject(selected); setStep(2); }} onDownload={download} onDelete={removeProject} deletingId={deletingId} ready={storageReady && !importing && !deletingId && !batchImages.busy && !restoringImage} onReload={reloadProjects} refreshing={storageLoading || saveCount > 0 || importing || !!deletingId || batchImages.busy || restoringImage} />}
+          {step === 0 && <Dashboard onStart={() => { selectProject(null); setStep(1); }} projects={projects} onOpen={(item) => { const selected = latestProjects.current.get(item.id) || item; try { assertEditorReadable(selected); } catch (error) { setNotice((error as Error).message); return; } selectProject(selected); setStep(2); }} onDownload={download} onDelete={removeProject} deletingId={deletingId} ready={storageReady && !importing && !deletingId && !batchImages.busy && !batchNarrations.busy && !restoringImage} onReload={reloadProjects} refreshing={storageLoading || saveCount > 0 || importing || !!deletingId || batchImages.busy || batchNarrations.busy || restoringImage} />}
           {step === 1 && (
             <ProjectSetup episode={episode} person={person} category={category} source={source} busy={busy} legacyImport={legacyImport} setLegacyImport={setLegacyImport} errors={setupErrors}
               setPerson={setPerson} setCategory={setCategory} setSource={setSource}
@@ -509,7 +545,7 @@ function Studio() {
           {step === 4 && project && <AssetStudio title="인물 기준 이미지" eyebrow="CHARACTER ANCHOR" description="얼굴 일관성을 위한 기준 이미지입니다. 업로드한 이미지가 있으면 생성 단계를 건너뛰어도 됩니다." asset={project.anchor} project={project} kind="anchor" onChange={(anchor, options) => persist({ ...project, anchor }, options)} />}
           {step === 5 && project && <><div className="review-return-actions">{reviewView?.anchor && <button type="button" className="btn ghost" onClick={() => { reviewView.returning = true; setStep(7); }}><ArrowLeft size={15} /> 작업 보드로 돌아가기</button>}</div><SceneStudio key={project.id} project={project} activeSceneId={activeScenes[project.id]} onActiveSceneChange={id => setActiveScenes(previous => ({ ...previous, [project.id]: id }))} onChange={updateScene} onProjectChange={persist} onTimingChange={applyNarrationTiming} onGeneratedNarration={selectGeneratedNarration} onMove={changeSceneOrder} onSplit={divideScene} onMerge={combineScene} /></>}
           {step === 6 && project && <AssetStudio title="썸네일 만들기" eyebrow="THUMBNAIL" description="대표 이미지를 선택하세요. 선택한 썸네일은 영상 마지막 인물 이름 화면의 배경에도 사용됩니다." asset={project.thumbnail} project={project} kind="thumbnail" onChange={(thumbnail, options) => persist({ ...project, thumbnail }, options)} />}
-          {step === 7 && project && <ImageReview key={project.id} project={project} view={reviewView!} onOpenScene={openReviewScene} batch={batchImages} onCompareImage={confirmComparedImage} restoringImage={restoringImage} onRestoreImage={restoreOriginalImage} mediaCheck={mediaCheck} onOpenMediaCheck={openMediaCheckLocation} promptExport={promptExport} />}
+          {step === 7 && project && <ImageReview key={project.id} project={project} view={reviewView!} onOpenScene={openReviewScene} batch={batchImages} onCompareImage={confirmComparedImage} restoringImage={restoringImage} onRestoreImage={restoreOriginalImage} mediaCheck={mediaCheck} onOpenMediaCheck={openMediaCheckLocation} promptExport={promptExport} batchNarrations={batchNarrations} />}
           {step === 8 && project && <Complete project={project} onDownload={() => download(project)} />}
         </section>
 
@@ -636,7 +672,7 @@ function Preflight({ project }: { project: ProjectData }) {
   </div>;
 }
 
-function ImageReview({ project, view, onOpenScene, batch, onCompareImage, restoringImage, onRestoreImage, mediaCheck, onOpenMediaCheck, promptExport }: { project: ProjectData; view: ReviewView; onOpenScene: (sceneId: string) => void; batch: SceneImageBatchController; onCompareImage: (request: ImageComparisonRequest) => Promise<ImageComparisonResult>; restoringImage: boolean; onRestoreImage: (request: RestoreImageRequest) => Promise<RestoreImageResult>; mediaCheck: ExportMediaCheckController; onOpenMediaCheck: (location: CheckLocation) => void; promptExport: ScenePromptExportController }) {
+function ImageReview({ project, view, onOpenScene, batch, onCompareImage, restoringImage, onRestoreImage, mediaCheck, onOpenMediaCheck, promptExport, batchNarrations }: { project: ProjectData; view: ReviewView; onOpenScene: (sceneId: string) => void; batch: SceneImageBatchController; onCompareImage: (request: ImageComparisonRequest) => Promise<ImageComparisonResult>; restoringImage: boolean; onRestoreImage: (request: RestoreImageRequest) => Promise<RestoreImageResult>; mediaCheck: ExportMediaCheckController; onOpenMediaCheck: (location: CheckLocation) => void; promptExport: ScenePromptExportController; batchNarrations: SceneNarrationBatchController }) {
   const errors = completionErrors(project);
   const [comparison, setComparison] = useState<{ sceneId: string; sceneIds: string[]; origin: HTMLElement | null; scrollY: number }>();
   const closeComparison = () => {
@@ -651,6 +687,7 @@ function ImageReview({ project, view, onOpenScene, batch, onCompareImage, restor
   return <div className="page"><PageHeading eyebrow="FINAL IMAGE REVIEW" title="전체 장면을 한 번 더 확인하세요" text="Scene 순서와 핵심 업적 장면, 썸네일을 검토한 뒤 MP4를 만듭니다." />
     <ScenePromptExport project={project} selection={promptExport} />
     <SceneImageBatch project={project} batch={batch} />
+    <SceneNarrationBatch project={project} batch={batchNarrations} />
     <ImageLibrary key={project.id} project={project} busy={restoringImage} onRestore={onRestoreImage} onCompare={(sceneId, origin) => setComparison({ sceneId, sceneIds: orderedScenes(project).map(scene => scene.id), origin, scrollY: window.scrollY })} />
     <ExportMediaCheck check={mediaCheck} onOpen={onOpenMediaCheck} />
     <SceneReviewBoard project={project} view={view} onOpenScene={onOpenScene} onCompareImage={onCompareImage} />

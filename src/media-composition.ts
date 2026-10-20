@@ -3,6 +3,11 @@ import type { ImageCandidate, MediaAsset, ProjectData, Scene, SceneComposition }
 export const candidateAssetId = (candidate: ImageCandidate) => `candidate:${candidate.id}`;
 export const narrationAssetId = (scene: Scene) => scene.narration_audio ? scene.narration_audio.asset_id || `narration:${scene.narration_audio.id || scene.narration_audio.path}` : undefined;
 export const musicAssetId = (project: ProjectData) => project.background_music ? project.background_music.asset_id || `music:${project.background_music.id || project.background_music.path}` : undefined;
+export function sceneNarrationAsset(project: Pick<ProjectData, "id">, scene: Pick<Scene, "id" | "narration_audio">): MediaAsset | undefined {
+  const voice = scene.narration_audio;
+  return voice ? { id: voice.asset_id || `narration:${voice.id || voice.path}`, kind: "audio", path: voice.path, mime_type: voice.mime_type, duration_sec: voice.duration_sec,
+    storage_key: voice.storage_key, generation: voice.generation, local_store: "audio", local_key: `${project.id}:narration:${scene.id}${voice.id ? `:${voice.id}` : ""}` } : undefined;
+}
 export const allCandidates = (project: ProjectData) => [project.anchor, project.thumbnail, ...project.scenes].flatMap(asset => asset.candidates)
   .concat(project.scenes.flatMap(scene => scene.support_candidates || []));
 
@@ -27,9 +32,8 @@ export function collectMediaAssets(project: ProjectData): MediaAsset[] {
     preview_inline_data: candidate.media_type === "video" && candidate.preview_url.startsWith("data:image/") ? candidate.preview_url : undefined,
     ...(candidate.media_type === "video" ? { local_store: "media" as const, local_key: `${project.id}:scene-video:${candidate.id}` } : {}) });
   for (const scene of project.scenes) {
-    const voice = scene.narration_audio;
-    if (voice) add({ id: narrationAssetId(scene)!, kind: "audio", path: voice.path, mime_type: voice.mime_type, duration_sec: voice.duration_sec,
-      storage_key: voice.storage_key, generation: voice.generation, local_store: "audio", local_key: `${project.id}:narration:${scene.id}${voice.id ? `:${voice.id}` : ""}` });
+    const voice = sceneNarrationAsset(project, scene);
+    if (voice) add(voice);
   }
   const music = project.background_music;
   if (music) add({ id: musicAssetId(project)!, kind: "audio", path: music.path, mime_type: music.mime_type, storage_key: music.storage_key,

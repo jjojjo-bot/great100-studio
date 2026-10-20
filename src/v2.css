@@ -327,3 +327,22 @@
 .prompt-export-feedback{color:#355d50;background:#edf2e7;border-radius:7px;padding:10px;font-size:12px;line-height:1.7;margin:10px 0}
 .prompt-export-empty{font-size:12px;text-align:center;padding:18px;color:#87938b}
 @media(max-width:1100px){.prompt-export-row{grid-template-columns:1fr}}
+
+.scene-narration-batch{padding:20px;margin-bottom:24px}
+.scene-narration-batch h3{display:flex;align-items:center;gap:8px;color:#214a43}
+.narration-batch-rows{list-style:none;padding:0;margin:16px 0;display:grid;gap:10px}
+.narration-batch-row{display:grid;grid-template-columns:minmax(190px,1fr) minmax(210px,1fr) minmax(150px,.8fr) auto;gap:14px;align-items:start;padding:14px;border:1px solid #e0dbcf;border-radius:8px;background:#fffdfa}
+.narration-batch-file,.narration-batch-target,.narration-batch-status{display:grid;gap:7px;min-width:0;font-size:12px;color:#52625d}
+.narration-batch-file strong{overflow-wrap:anywhere}
+.narration-batch-row small{display:block;font-size:11px;line-height:1.7;color:#87938b;overflow-wrap:anywhere}
+.narration-batch-target label{display:grid;gap:5px;font-size:11px}
+.narration-batch-target select{min-width:0;width:100%;font-size:12px}
+.narration-batch-row audio{width:100%;max-width:100%;height:34px}
+.narration-batch-row .btn{font-size:11px;white-space:normal}
+.narration-batch-status>strong{display:flex;align-items:center;gap:5px;font-size:12px;color:#52625d}
+.narration-batch-done{background:#f3f6ee}
+.narration-batch-error{border-color:#e8c9b5}
+.narration-batch-timing{margin-top:18px}
+.narration-batch-timing>small{display:block;font-size:11px;line-height:1.7;color:#718178;margin:8px 0}
+.narration-batch-timing summary{font-size:12px;color:#52625d;cursor:pointer;margin:10px 0}
+@media(max-width:1200px){.narration-batch-row{grid-template-columns:minmax(190px,1fr) minmax(210px,1fr)}.narration-batch-row>button{justify-self:end}}
