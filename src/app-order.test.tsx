@@ -43,6 +43,44 @@ function addBoundary() {
   project.scenes[0].narration = "앞 문구 뒤 문구";
 }
 
+it("merges the active scene with the next and restores the original candidate palettes, captions and core link", async () => {
+  await open(); fireEvent.click(screen.getByRole("button", { name: "다음 장면과 합치기" }));
+  expect(tabTitles()).toEqual(["1이야기 1 · 이야기 2", "2이야기 3"]);
+  expect(lastSaved().editor_version).toBe(5); expect(lastSaved().scenes[0].composition!.visuals).toHaveLength(2);
+  expect(lastSaved().scenes[0].captions!.map(block => block.id)).toEqual([project.scenes[0].captions![0].id, project.scenes[1].captions![0].id]);
+  expect(lastSaved().editor?.core_scene_ids).toEqual(["scene_01"]);
+  undo(); expect(tabTitles()).toEqual(["1이야기 1", "2이야기 2", "3이야기 3"]);
+  expect(lastSaved().scenes[0].candidates).toEqual(project.scenes[0].candidates); expect(lastSaved().scenes[1].candidates).toEqual(project.scenes[1].candidates);
+  expect(lastSaved().editor?.core_scene_ids).toEqual(project.editor?.core_scene_ids);
+  redo(); expect(tabTitles()).toHaveLength(2);
+});
+
+it("retains the merged-away scene's late generation in the merged palette and restores it on undo", async () => {
+  let finish!: (candidates: ImageCandidate[]) => void;
+  mock.generate.mockReturnValue(new Promise<ImageCandidate[]>(resolve => { finish = resolve; }));
+  await open(); fireEvent.click(screen.getByRole("button", { name: "다음 Scene" }));
+  fireEvent.click(screen.getByRole("button", { name: "후보 2장 생성" }));
+  await waitFor(() => expect(mock.generate).toHaveBeenCalledOnce());
+  fireEvent.click(screen.getByRole("button", { name: "이전 Scene" }));
+  fireEvent.click(screen.getByRole("button", { name: "다음 장면과 합치기" }));
+  const expected = structuredClone(lastSaved().scenes[0].composition);
+  const candidate: ImageCandidate = { id: "merged-late", path: "projects/original/scene02/late.png", preview_url: "data:image/png;base64,a", mode: "openai", created_at: "now" };
+  await act(async () => finish([candidate]));
+  expect(lastSaved().scenes).toHaveLength(2); expect(lastSaved().scenes[0].candidates).toContainEqual(candidate);
+  expect(lastSaved().scenes[0].composition).toEqual(expected);
+  undo(); expect(lastSaved().scenes).toHaveLength(3); expect(lastSaved().scenes[1].candidates).toContainEqual(candidate);
+  redo(); expect(lastSaved().scenes[0].composition).toEqual(expected);
+});
+
+it("disables merging at the last scene and above 120 seconds", async () => {
+  project.scenes[0].duration = 120; project.scenes[0].end_sec = 120; project.scenes[0].captions![0].end_sec = 120;
+  for (const scene of project.scenes.slice(1)) { scene.start_sec! += 110; scene.end_sec! += 110; scene.captions!.forEach(block => { block.start_sec += 110; block.end_sec += 110; }); }
+  await open();
+  expect(screen.getByRole("button", { name: "다음 장면과 합치기" }).hasAttribute("disabled")).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "다음 Scene" })); fireEvent.click(screen.getByRole("button", { name: "다음 Scene" }));
+  expect(screen.getByRole("button", { name: "다음 장면과 합치기" }).hasAttribute("disabled")).toBe(true);
+});
+
 it("splits at the selected caption, retains the active left scene, and restores both sides in one undo/redo", async () => {
   addBoundary(); await open();
   expect(screen.getByLabelText("장면을 나눌 자막 경계")).toHaveProperty("value", "second");

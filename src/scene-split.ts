@@ -1,8 +1,8 @@
 import { assertEditorReadable, prepareEditorWrite } from "./editor-format";
-import { bindComposition, cropComposition, sceneComposition } from "./media-composition";
+import { bindComposition, cropComposition } from "./media-composition";
 import { orderedScenes } from "./scene-order";
-import { milliseconds, OPENING_DURATION, projectTimeline, VIDEO_FPS } from "./timeline";
-import { resolveImageMotion } from "./video";
+import { milliseconds } from "./timeline";
+import { captureSceneComposition } from "./scene-presentation";
 import type { ProjectData, Scene } from "./types";
 
 export interface SplitBoundary { caption_id: string; seconds: number; before: string; after: string; error?: string }
@@ -39,20 +39,7 @@ export function splitScene(project: ProjectData, sceneId: string, captionId: str
   if (boundary.error) throw new Error(boundary.error);
   const captionIndex = scene.captions!.findIndex(block => block.id === captionId);
   const duration = scene.duration ?? 10; const cut = boundary.seconds;
-  const entry = projectTimeline(prepared).scenes.find(item => item.scene.id === sceneId)!;
-  const clock = (seconds: number) => (Math.round((entry.startMs + milliseconds(seconds)) * VIDEO_FPS / 1000) - entry.startFrame) / VIDEO_FPS;
-  const original = structuredClone(sceneComposition(scene));
-  original.visuals = original.visuals.map((section, sectionIndex) => {
-    const frameDuration = clock(section.end_sec) - clock(section.start_sec);
-    const first = index === 0 && sectionIndex === 0 && original.mode !== "segments";
-    return { ...section, motion: resolveImageMotion(section.motion, index),
-      intro_duration_sec: original.mode === "segments" || !section.intro_asset_id ? section.intro_duration_sec : Math.min(frameDuration - 1 / VIDEO_FPS, clock(section.start_sec + (section.intro_duration_sec ?? 0)) - clock(section.start_sec)),
-      support_start_sec: original.mode === "segments" || section.support_start_sec === undefined ? section.support_start_sec : clock(section.start_sec + section.support_start_sec) - clock(section.start_sec),
-      presentation_duration_sec: section.presentation_duration_sec ?? frameDuration,
-      playback_offset_sec: section.playback_offset_sec ?? 0,
-      motion_start: first ? OPENING_DURATION / (OPENING_DURATION + frameDuration) : section.motion_start,
-      motion_end: section.motion_end };
-  });
+  const { composition: original, clock, entry } = captureSceneComposition(prepared, scene, index);
   original.narrations = original.narrations.map(clip => ({ ...clip, continuity_id: clip.continuity_id || `${scene.id}:${clip.id}` }));
   const start = scene.start_sec ?? entry.sourceStartMs / 1000;
   const sourceOffset = scene.split_origin?.start_sec ?? 0;
@@ -64,13 +51,16 @@ export function splitScene(project: ProjectData, sceneId: string, captionId: str
       status: right && scene.status === "generating" ? scene.candidates.length ? "ready" : "idle" : scene.status,
       video_intro_candidate_id: null, emphasis_offset_sec: (scene.emphasis_offset_sec ?? 0) + clock(from),
       split_origin: { parent_scene_id: scene.id, origin_scene_id: originId, start_sec: (milliseconds(sourceOffset) + milliseconds(from)) / 1000, end_sec: (milliseconds(sourceOffset) + milliseconds(to)) / 1000 } };
-    part.composition = bindComposition(part, cropComposition(original, from, to, clock));
+    const composition = cropComposition(original, from, to, clock);
+    const presentation = composition.visuals[0]?.presentation;
+    if (presentation) { part.subtitle = presentation.subtitle; part.music_volume = presentation.music_volume; }
+    part.composition = bindComposition(part, composition);
     return part;
   };
   const left = makePart(scene.id, 0, cut, scene.captions!.slice(0, captionIndex), false);
   const right = makePart(newSceneId, cut, duration, scene.captions!.slice(captionIndex), true);
   const scenes = [...ordered.slice(0, index), left, right, ...ordered.slice(index + 1)].map((item, position) => ({ ...item, number: position + 1 }));
   const core = prepared.editor?.core_scene_ids || [];
-  return { ...prepared, editor_version: 4, media: prepared.media || { assets: [] }, scenes,
+  return { ...prepared, editor_version: Math.max(4, prepared.editor_version ?? 0), media: prepared.media || { assets: [] }, scenes,
     editor: { ...prepared.editor, core_scene_ids: core.includes(scene.id) ? [...core.slice(0, core.indexOf(scene.id) + 1), right.id, ...core.slice(core.indexOf(scene.id) + 1)] : core } };
 }

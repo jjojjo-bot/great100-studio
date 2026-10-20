@@ -2,7 +2,7 @@ import { resolveVideoIntroImage, sceneTiming } from "./video";
 import type { Scene } from "./types";
 
 export function SceneTimingPanel({ scene, onChange }: { scene: Scene; onChange: (scene: Scene) => void }) {
-  if (scene.composition?.mode === "segments") return <div className="panel scene-timing-panel"><strong>분할한 화면 구간</strong><small>분할 전 화면 전환과 원본 재생 위치를 유지합니다. 다른 화면을 선택하면 이 장면에만 적용됩니다.</small><p>{scene.composition.visuals.map(section => `${section.start_sec}–${section.end_sec}초`).join(" · ")}</p></div>;
+  if (scene.composition?.mode === "segments") return <div className="panel scene-timing-panel"><strong>편집한 화면 구간</strong><small>원래 화면 전환과 재생 위치를 유지합니다. 다른 화면·효과·강조 자막·음악 볼륨을 선택하면 이 장면의 전체 구간에 적용됩니다.</small><p>{scene.composition.visuals.map(section => `${section.presentation?.title ? section.presentation.title + ": " : ""}${section.start_sec}–${section.end_sec}초${section.presentation ? ` (강조: ${section.presentation.subtitle || "없음"}, 음악 ${section.presentation.music_volume}%)` : ""}`).join(" · ")}</p></div>;
   const selected = scene.candidates.find((candidate) => candidate.id === scene.selected_candidate_id);
   const video = selected?.media_type === "video" ? selected : undefined;
   const intro = !!video && !!resolveVideoIntroImage(scene);

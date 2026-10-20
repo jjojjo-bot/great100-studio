@@ -62,7 +62,8 @@ export function compositionSignature(scene: Scene): string {
 export function sceneComposition(scene: Scene): SceneComposition {
   if (scene.composition && (!Array.isArray(scene.composition.visuals) || !Array.isArray(scene.composition.narrations))) throw new Error("장면의 자료 구간 구성이 잘못되었습니다.");
   const signature = compositionSignature(scene);
-  if (scene.composition?.source_signature === signature) return scene.composition;
+  const presentationChanged = scene.composition?.visuals.some(section => section.presentation) && (scene.composition.controls?.subtitle !== scene.subtitle || scene.composition.controls?.music_volume !== scene.music_volume);
+  if (scene.composition?.source_signature === signature && !presentationChanged) return scene.composition;
   if (scene.composition?.mode === "segments") return updateBoundComposition(scene);
   if (scene.composition && (scene.composition.visuals.length > 1 || scene.composition.narrations.length > 1)) {
     throw new Error("여러 구간으로 구성된 장면은 구간 편집으로 수정해 주세요.");
@@ -83,7 +84,7 @@ export function sceneComposition(scene: Scene): SceneComposition {
 
 export const compositionControls = (scene: Scene): NonNullable<SceneComposition["controls"]> => ({ duration: scene.duration ?? 10,
   selected: scene.selected_candidate_id, support: scene.support_selected_candidate_id, motion: scene.motion,
-  narration: narrationAssetId(scene), narration_duration: scene.narration_audio?.duration_sec });
+  narration: narrationAssetId(scene), narration_duration: scene.narration_audio?.duration_sec, subtitle: scene.subtitle, music_volume: scene.music_volume });
 
 export function bindComposition(scene: Scene, composition: SceneComposition): SceneComposition {
   return { ...composition, mode: "segments", controls: compositionControls(scene), source_signature: compositionSignature(scene) };
@@ -94,11 +95,13 @@ export function cropComposition(composition: SceneComposition, from: number, to:
     const start = Math.max(from, section.start_sec); const end = Math.min(to, section.end_sec);
     return { ...section, start_sec: Math.round((start - from) * 1000) / 1000, end_sec: Math.round((end - from) * 1000) / 1000,
       presentation_duration_sec: section.presentation_duration_sec ?? section.end_sec - section.start_sec,
+      presentation: section.presentation ? { ...section.presentation, emphasis_offset_sec: section.presentation.emphasis_offset_sec + clock(start) - clock(section.start_sec) } : undefined,
       playback_offset_sec: (section.playback_offset_sec ?? 0) + clock(start) - clock(section.start_sec) };
   }), narrations: composition.narrations.filter(clip => clip.end_sec > from && clip.start_sec < to).map(clip => {
     const start = Math.max(from, clip.start_sec); const end = Math.min(to, clip.end_sec);
     return { ...clip, start_sec: Math.round((start - from) * 1000) / 1000, end_sec: Math.round((end - from) * 1000) / 1000,
       timeline_offset_sec: (clip.timeline_offset_sec ?? 0) + from - clock(from),
+      playback_end_sec: clip.playback_end_sec === undefined ? undefined : Math.max(0, Math.min(clip.playback_end_sec, clock(to)) - clock(from)),
       source_start_sec: clip.source_start_sec + start - clip.start_sec, source_end_sec: clip.source_start_sec + end - clip.start_sec };
   }) };
 }
@@ -128,6 +131,10 @@ function updateBoundComposition(scene: Scene): SceneComposition {
     }
   }
   if (current.motion !== previous.motion) for (const section of composition.visuals) section.motion = current.motion;
+  for (const section of composition.visuals) if (section.presentation) {
+    if (current.subtitle !== previous.subtitle) section.presentation.subtitle = scene.subtitle || "";
+    if (current.music_volume !== previous.music_volume) section.presentation.music_volume = scene.music_volume ?? 45;
+  }
   if (current.narration !== previous.narration || current.narration_duration !== previous.narration_duration || (current.duration !== previous.duration && scene.narration_audio)) {
     const duration = Math.min(scene.duration ?? 10, scene.narration_audio?.duration_sec ?? 0);
     composition.narrations = current.narration && duration > 0 ? [{ id: `${scene.id}:voice`, asset_id: current.narration, start_sec: 0, end_sec: duration, source_start_sec: 0, source_end_sec: duration }] : [];
@@ -181,6 +188,7 @@ export function mediaCompositionErrors(project: ProjectData): string[] {
       const presentation = section.presentation_duration_sec ?? section.end_sec - section.start_sec;
       const offset = section.playback_offset_sec ?? 0;
       if (!Number.isFinite(presentation) || presentation <= 0 || !Number.isFinite(offset) || offset < 0 || offset + section.end_sec - section.start_sec > presentation + 2 / 15 + 0.001) errors.push(`Scene ${scene.number}의 원본 재생 위치가 잘못되었습니다.`);
+      if (section.presentation && (typeof section.presentation.title !== "string" || typeof section.presentation.subtitle !== "string" || !Number.isFinite(section.presentation.emphasis_offset_sec) || section.presentation.emphasis_offset_sec < 0 || !Number.isFinite(section.presentation.music_volume) || section.presentation.music_volume < 0 || section.presentation.music_volume > 100)) errors.push(`Scene ${scene.number}의 구간별 강조 자막·음악 설정이 잘못되었습니다.`);
       if (section.intro_asset_id && (!Number.isFinite(section.intro_duration_sec) || section.intro_duration_sec! < 0 || section.intro_duration_sec! >= presentation)) errors.push(`Scene ${scene.number}의 앞 이미지 구간이 잘못되었습니다.`);
       if (section.support_asset_id && (!Number.isFinite(section.support_start_sec) || section.support_start_sec! < 0 || section.support_start_sec! >= presentation)) errors.push(`Scene ${scene.number}의 보조 이미지 구간이 잘못되었습니다.`);
     }
@@ -190,6 +198,7 @@ export function mediaCompositionErrors(project: ProjectData): string[] {
       const asset = byId.get(clip.asset_id);
       if (!clip.id || clipIds.has(clip.id) || asset?.kind !== "audio" || !validRange(clip.start_sec, clip.end_sec) || clip.start_sec < voiceEnd
         || !Number.isFinite(clip.timeline_offset_sec ?? 0) || Math.abs(clip.timeline_offset_sec ?? 0) > 2 / 15 + 0.001
+        || (clip.playback_end_sec !== undefined && (!Number.isFinite(clip.playback_end_sec) || clip.playback_end_sec < 0 || clip.playback_end_sec > duration + 2 / 15 + 0.001))
         || !Number.isFinite(clip.source_start_sec) || !Number.isFinite(clip.source_end_sec) || clip.source_start_sec < 0 || clip.source_end_sec <= clip.source_start_sec
         || clip.source_end_sec > (asset?.duration_sec ?? Infinity) + 0.001 || Math.abs(clip.end_sec - clip.start_sec - (clip.source_end_sec - clip.source_start_sec)) > 0.001) errors.push(`Scene ${scene.number}의 녹음 구간 또는 원본 연결이 잘못되었습니다.`);
       clipIds.add(clip.id); voiceEnd = clip.end_sec;

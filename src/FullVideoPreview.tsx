@@ -69,7 +69,7 @@ export function FullVideoPreview({ project, sceneId, seekRequest, onPositionChan
     mediaRef.current.forEach((item, itemIndex) => { if (itemIndex !== index || !state.videoActive || state.videoTime >= (segment.videoTrimEnd ?? Infinity) - 0.04) item.video?.pause(); });
     const parts = captionParts(segment.caption);
     const caption = segment.timedCaptions ? activeTimedCaption(segment.timedCaptions, seconds) : parts[Math.min(parts.length - 1, Math.floor(progress * parts.length))];
-    drawFrame(ctx, visual, caption, state.motionProgress, project.person, segment.motion, segment.emphasisSubtitle && state.emphasisAge < 3 ? segment.emphasisSubtitle : "", state.emphasisAge, media.support, state.supportOpacity, state.supportProgress, segment.opening ? clamp((1 - progress) * segment.duration / 0.8, 0, 1) : 0, !!segment.ending, index === 1 ? clamp(seconds / 0.5, 0, 1) : 1, state.introOpacity ? media.image : null, state.introOpacity);
+    drawFrame(ctx, visual, caption, state.motionProgress, project.person, segment.motion, segment.emphasisSubtitle && state.emphasisAge < 3 ? segment.emphasisSubtitle : "", state.emphasisAge, media.support, state.supportOpacity, state.supportProgress, segment.opening ? clamp((1 - progress) * segment.duration / 0.8, 0, 1) : 0, !!segment.ending, !sceneId && index === 1 ? clamp(seconds / 0.5, 0, 1) : 1, state.introOpacity ? media.image : null, state.introOpacity);
     voicesRef.current.forEach((audio, clipIndex) => {
       const clip = voices[clipIndex];
       if (clip && time >= clip.start_sec && time < clip.end_sec && playingRef.current) {

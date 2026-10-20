@@ -1,6 +1,6 @@
 import type { ProjectData, Scene } from "./types";
 import { mergeSceneChanges } from "./project-changes";
-import { bindComposition, sceneComposition } from "./media-composition";
+import { bindComposition, compositionSignature, sceneComposition } from "./media-composition";
 
 export interface EditOptions { history?: boolean; base?: ProjectData; label?: string; structure?: boolean }
 type Target = { kind: "project" | "anchor" | "thumbnail" | "scene"; id?: string };
@@ -9,7 +9,8 @@ type Structure = { before: string[]; after: string[]; added: Scene[]; removed: S
 type Entry = { group: number; label: string; patches: Patch[]; structure?: Structure };
 export type HistoryResult = { status: "empty" | "conflict" } | { status: "applied"; project: ProjectData };
 
-const sceneFields = ["number", "subtitle", "title", "caption", "captions", "narration", "composition", "split_origin", "emphasis_offset_sec", "prompt", "duration", "start_sec", "end_sec", "motion", "music_volume", "video_intro_candidate_id", "video_intro_duration_sec", "video_trim_start_sec", "video_trim_end_sec", "support_start_sec", "selected_candidate_id", "support_selected_candidate_id", "support_image_prompt"];
+const sceneFields = ["number", "subtitle", "title", "caption", "captions", "narration", "composition", "split_origin", "merge_origin", "source_scene_ids", "emphasis_offset_sec", "prompt", "duration", "start_sec", "end_sec", "motion", "music_volume", "video_intro_candidate_id", "video_intro_duration_sec", "video_trim_start_sec", "video_trim_end_sec", "support_start_sec", "selected_candidate_id", "support_selected_candidate_id", "support_image_prompt"];
+const candidateField = (field: string) => field === "candidates" || field === "support_candidates";
 const sceneOrder = (project: ProjectData) => project.scenes.map(scene => scene.id);
 const labels: Record<string, string> = {
   subtitle: "강조 자막", title: "장면 제목", caption: "영상 자막", captions: "자막 문구·시간", prompt: "이미지 프롬프트",
@@ -42,7 +43,7 @@ function patchesBetween(before: ProjectData, after: ProjectData, structure = fal
   collect({ kind: "thumbnail" }, ["prompt", "selected_candidate_id"]);
   for (const scene of after.scenes) {
     const fields = structure ? sceneFields : sceneFields.filter(field => field !== "composition");
-    collect({ kind: "scene", id: scene.id }, structure ? [...fields, "narration_audio"] : fields);
+    collect({ kind: "scene", id: scene.id }, structure ? [...fields, "narration_audio", "candidates", "support_candidates"] : fields);
     if (!structure && scene.composition?.mode === "segments") {
       const target: Target = { kind: "scene", id: scene.id }; const field = "visual_composition";
       const left = valueAt(before, { target, field }); const right = valueAt(after, { target, field });
@@ -81,6 +82,14 @@ function apply(project: ProjectData, patches: Patch[], direction: "before" | "af
     }
     const target = object(next, patch.target)!;
     const value = structuredClone(patch[direction]);
+    if (patch.target.kind === "scene" && candidateField(patch.field)) {
+      const expected = direction === "before" ? "after" : "before";
+      const before = { [patch.field]: patch[expected] || [] } as unknown as Scene;
+      const after = { [patch.field]: value || [] } as unknown as Scene;
+      const merged = mergeSceneChanges(before, after, target as unknown as Scene)[patch.field as "candidates" | "support_candidates"];
+      if (value === undefined && !merged?.length) delete target[patch.field]; else target[patch.field] = merged;
+      continue;
+    }
     if (value === undefined) delete target[patch.field];
     else target[patch.field] = value;
   }
@@ -104,11 +113,11 @@ export class EditorHistory {
   }
   breakGroup() { this.group++; }
 
-  reconcile(project: ProjectData) {
+  reconcile(project: ProjectData, detached: Scene[] = []) {
     this.reset(project.id);
     // A nested split can reference a child temporarily absent after undoing its
     // parent split. Keep that history while an entry can restore the child.
-    const scenes = new Map([...this.past, ...this.future].flatMap(entry => [...(entry.structure?.added || []), ...(entry.structure?.removed || [])]).map(scene => [scene.id, scene]));
+    const scenes = new Map([...detached, ...[...this.past, ...this.future].flatMap(entry => [...(entry.structure?.added || []), ...(entry.structure?.removed || [])])].map(scene => [scene.id, scene]));
     for (const scene of project.scenes) scenes.set(scene.id, scene);
     const available = { ...project, scenes: [...scenes.values()] };
     this.past = this.past.filter(entry => entry.patches.every(patch => referencesExist(available, patch)));
@@ -119,10 +128,10 @@ export class EditorHistory {
     if (label) this.breakGroup();
     this.reset(after.id);
     if (!structural && !sameScenes(before, after)) { this.reset(after.id, true); return; }
-    this.reconcile(after);
     const structure: Structure | undefined = structural ? { before: sceneOrder(before), after: sceneOrder(after),
       added: structuredClone(after.scenes.filter(scene => !before.scenes.some(item => item.id === scene.id))),
       removed: structuredClone(before.scenes.filter(scene => !after.scenes.some(item => item.id === scene.id))) } : undefined;
+    this.reconcile(after, structure?.removed);
     const patches = patchesBetween(before, after, structural);
     if (!patches.length && !structure) return;
     this.future = [];
@@ -156,7 +165,19 @@ export class EditorHistory {
     const entry = from.at(-1);
     if (!entry) return { status: "empty" };
     const expected = direction === "before" ? "after" : "before";
-    if ((entry.structure && !same(sceneOrder(project), entry.structure[expected])) || !entry.patches.every(patch => same(valueAt(project, patch), patch[expected]))) {
+    const matches = (patch: Patch) => {
+      if (patch.target.kind === "scene" && candidateField(patch.field)) return ((patch[expected] || []) as { id: string }[]).every(item => ((valueAt(project, patch) || []) as { id: string }[]).some(current => current.id === item.id));
+      if (patch.target.kind === "scene" && patch.field === "composition") {
+        const scene = project.scenes.find(item => item.id === patch.target.id)!;
+        const current = scene?.composition; const previous = patch[expected] as Scene["composition"];
+        // A retained upload can change the legacy automatic intro image after
+        // undo. Its derived single-section composition is not an independent edit.
+        if (current && previous && !current.mode && !previous.mode && current.visuals.length <= 1 && previous.visuals.length <= 1 && current.narrations.length <= 1 && previous.narrations.length <= 1
+          && current.source_signature !== previous.source_signature && current.source_signature === compositionSignature(scene)) return true;
+      }
+      return same(valueAt(project, patch), patch[expected]);
+    };
+    if ((entry.structure && !same(sceneOrder(project), entry.structure[expected])) || !entry.patches.every(matches)) {
       this.reset(project.id, true);
       return { status: "conflict" };
     }

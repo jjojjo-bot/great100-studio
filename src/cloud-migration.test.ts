@@ -117,16 +117,21 @@ it("transfers detached originals with stable asset identities and interval refer
   expect(await db.get("projects", original.id)).toEqual(original); db.close();
 });
 
-it("preserves v4 and cropped source windows when moving a split project into an account", async () => {
-  const original = prepareEditorWrite(await seed()); original.editor_version = 4;
+it.each([4, 5])("preserves v%s and cropped source windows when moving an edited project into an account", async version => {
+  const original = prepareEditorWrite(await seed()); original.editor_version = version;
   const { bindComposition } = await import("./media-composition"); const scene = original.scenes[0];
   scene.split_origin = { parent_scene_id: scene.id, origin_scene_id: scene.id, start_sec: 1, end_sec: 3 };
   const composition = scene.composition!; composition.narrations[0].source_start_sec = 0.5;
   composition.narrations[0].source_end_sec = 1.5; composition.narrations[0].start_sec = 0; composition.narrations[0].end_sec = 1;
+  if (version === 5) {
+    scene.merge_origin = { scene_ids: [scene.id, "previous-scene"] };
+    for (const section of composition.visuals) section.presentation = { title: scene.title, subtitle: "보존할 강조 자막", music_volume: 85, emphasis_offset_sec: 0 };
+    composition.narrations[0].playback_end_sec = 1;
+  }
   scene.narration_audio = undefined; scene.composition = bindComposition(scene, composition);
   const db = await openDB("great100-studio", 6); await db.put("projects", original);
   await importLocalProject(original.id); const migrated = [...mock.saved.values()][0];
-  expect(mock.create.mock.calls[0][0].editor_version).toBe(4); expect(migrated.editor_version).toBe(4);
+  expect(mock.create.mock.calls[0][0].editor_version).toBe(version); expect(migrated.editor_version).toBe(version);
   expect(migrated.scenes[0].composition).toEqual(scene.composition);
   expect(migrated.scenes[0].split_origin).toEqual(scene.split_origin);
   expect(migrated.media!.assets.find(asset => asset.id === composition.narrations[0].asset_id)?.storage_key).toBeTruthy();

@@ -1,7 +1,7 @@
 import type { ProjectData, Scene } from "./types";
 import { mediaCompositionErrors, prepareMediaProject } from "./media-composition";
 
-export const EDITOR_VERSION = 4;
+export const EDITOR_VERSION = 5;
 const nonempty = (value: unknown): value is string => typeof value === "string" && !!value.trim();
 const sourceJson = (value: unknown) => JSON.stringify(value, (_key, item) => item && typeof item === "object" && !Array.isArray(item)
   ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
@@ -66,6 +66,7 @@ export function prepareEditorWrite(project: ProjectData): ProjectData {
   const next = (project.editor_version ?? 0) < 2 && project.scenes.some(scene => scene.narration_audio?.id)
     ? { ...readEditorProject(project), editor_version: 2 } : project;
   const prepared = prepareMediaProject(readEditorProject(next));
+  if (prepared.scenes.some(scene => scene.merge_origin || scene.composition?.visuals.some(section => section.presentation) || scene.composition?.narrations.some(clip => clip.playback_end_sec !== undefined))) return { ...prepared, editor_version: Math.max(5, prepared.editor_version ?? 0), media: prepared.media || { assets: [] } };
   return prepared.scenes.some(scene => scene.split_origin || scene.composition?.mode === "segments")
     ? { ...prepared, editor_version: Math.max(4, prepared.editor_version ?? 0), media: prepared.media || { assets: [] } } : prepared;
 }
@@ -84,6 +85,7 @@ export function editorIdentityErrors(project: ProjectData): string[] {
     if (!Number.isSafeInteger(scene.number) || scene.number < 1 || numbers.has(scene.number)) errors.push("장면 표시 번호가 잘못되었거나 중복되었습니다.");
     numbers.add(scene.number);
     const duration = scene.duration ?? 10;
+    if (scene.merge_origin && (!Array.isArray(scene.merge_origin.scene_ids) || !scene.merge_origin.scene_ids.length || scene.merge_origin.scene_ids.some(id => !nonempty(id)) || new Set(scene.merge_origin.scene_ids).size !== scene.merge_origin.scene_ids.length)) errors.push(`Scene ${scene.number}의 합친 장면 출처가 잘못되었습니다.`);
     if (!Number.isFinite(duration) || duration < 1 || duration > 120) errors.push(`Scene ${scene.number}의 길이는 1~120초여야 합니다.`);
     if (scene.narration_audio && (!Number.isFinite(scene.narration_audio.duration_sec) || scene.narration_audio.duration_sec > duration + 0.15)) errors.push(`Scene ${scene.number}의 녹음이 장면보다 깁니다. 녹음 길이에 맞추기를 적용해 주세요.`);
     if ((project.editor_version ?? 0) >= 1) {

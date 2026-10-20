@@ -89,8 +89,8 @@ export function buildSceneSegments(project: ProjectData, scene: Scene, index: nu
     }).filter(clip => clip.end_sec > clip.start_sec);
     return { title: scene.title, sceneId: scene.id, caption: project.schema_version === "2.1" ? scene.narration || "" : scene.caption ?? scene.title,
     timedCaptions: captions,
-    emphasisSubtitle: project.schema_version === "2.1" ? scene.subtitle : undefined,
-    emphasisOffset: (scene.emphasis_offset_sec ?? 0) + section.start_sec,
+    emphasisSubtitle: project.schema_version === "2.1" ? section.presentation?.subtitle ?? scene.subtitle : undefined,
+    emphasisOffset: section.presentation?.emphasis_offset_sec ?? (scene.emphasis_offset_sec ?? 0) + section.start_sec,
     imageUrl: imageUrl(section.intro_asset_id || section.asset_id), videoCandidateId: image.kind === "video" ? image.id.replace(/^candidate:/, "") : undefined,
     videoAssetId: image.kind === "video" ? image.id : undefined, narrationClips,
     videoIntroDuration: introDuration,
@@ -99,7 +99,7 @@ export function buildSceneSegments(project: ProjectData, scene: Scene, index: nu
     supportImageUrl: imageUrl(section.support_asset_id), supportStartsAt: section.support_start_sec === undefined ? undefined : bound ? section.support_start_sec : boundary(section.support_start_sec),
     duration, motion: resolveImageMotion(section.motion, index), motionStart: section.motion_start, motionEnd: section.motion_end,
     playbackOffset: section.playback_offset_sec, presentationDuration: section.presentation_duration_sec, preservePresentation: bound || undefined,
-    musicVolume: sceneMusicVolume(scene.music_volume) };
+    musicVolume: sceneMusicVolume(section.presentation?.music_volume ?? scene.music_volume) };
   });
 }
 

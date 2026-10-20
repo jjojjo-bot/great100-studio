@@ -49,12 +49,21 @@ import { mergeProjectChanges } from "./project-changes";
 import { collectMediaAssets, prepareMediaProject } from "./media-composition";
 import { moveScene, orderedScenes } from "./scene-order";
 import { splitBoundaries, splitScene } from "./scene-split";
+import { mergeScene, sceneMergeTarget } from "./scene-merge";
 import { hasSceneNarration } from "./scene-audio";
 import { LocalProjectImport } from "./LocalProjectImport";
 import { VisitorTrends } from "./VisitorTrends";
 import type { ImageCandidate, ImageMotion, ProjectData, Scene, VisualAsset } from "./types";
 
 const STEPS = ["대시보드", "프로젝트", "파싱 확인", "사전 점검", "기준 이미지", "Scene 검토", "썸네일", "전체 검토", "완료"];
+
+function SceneMergePanel({ project, scene, onMerge }: { project: ProjectData; scene: Scene; onMerge: (projectId: string, sceneId: string, nextId: string) => void }) {
+  const target = sceneMergeTarget(project, scene.id);
+  return <section className="panel scene-split-panel" aria-label="장면 합치기"><div><strong>다음 장면과 합치기</strong><small>두 장면의 화면·녹음·자막을 순서대로 이어 붙입니다. 원본과 전체 영상 길이를 유지하며 실행 취소 한 번으로 되돌립니다.</small></div>
+    <p aria-live="polite">{target.error || `Scene ${scene.number} + Scene ${target.second.number} · ${target.second.title} · ${scene.duration ?? 10}초 + ${target.second.duration ?? 10}초 → ${target.duration}초`}</p>
+    <button className="btn ghost" disabled={!!target.error} onClick={() => onMerge(project.id, scene.id, target.second.id)}>다음 장면과 합치기</button>
+  </section>;
+}
 
 function SceneSplitPanel({ project, scene, onSplit }: { project: ProjectData; scene: Scene; onSplit: (projectId: string, sceneId: string, captionId: string) => void }) {
   const boundaries = splitBoundaries(project, scene);
@@ -259,12 +268,16 @@ function Studio() {
   const updateScene = async (scene: Scene, options?: EditOptions) => {
     if (!project) return;
     const current = latestProjects.current.get(project.id);
-    if (current && !current.scenes.some(item => item.id === scene.id) && options?.history === false && scene.split_origin) {
-      history.captureDetachedScene(project.id, project.scenes.find(item => item.id === scene.id), scene);
+    const baseScene = project.scenes.find(item => item.id === scene.id);
+    if (current && !current.scenes.some(item => item.id === scene.id) && options?.history === false && baseScene) {
+      history.captureDetachedScene(project.id, baseScene, scene);
       const assets = collectMediaAssets({ ...current, scenes: [scene] });
       const retained = new Map(current.media?.assets.map(asset => [asset.id, asset]));
       for (const asset of assets) if (!retained.has(asset.id)) retained.set(asset.id, asset);
-      await persist({ ...current, media: { assets: [...retained.values()] } }, { history: false, base: current });
+      const owner = current.scenes.find(item => item.merge_origin?.scene_ids.includes(scene.id));
+      const additions = (before: ImageCandidate[] = [], next: ImageCandidate[] = [], existing: ImageCandidate[] = []) => [...existing, ...next.filter(candidate => !before.some(item => item.id === candidate.id) && !existing.some(item => item.id === candidate.id))];
+      const scenes = current.scenes.map(item => item.id === owner?.id ? { ...item, candidates: additions(baseScene.candidates, scene.candidates, item.candidates), support_candidates: additions(baseScene.support_candidates, scene.support_candidates, item.support_candidates) } : item);
+      await persist({ ...current, scenes, media: { assets: [...retained.values()] } }, { history: false, base: current });
       return;
     }
     await persist({ ...project, scenes: project.scenes.map((item) => (item.id === scene.id ? scene : item)) }, options);
@@ -274,6 +287,13 @@ function Studio() {
     const current = latestProjects.current.get(projectId);
     if (!current) return;
     try { void persist(splitScene(current, sceneId, captionId), { base: current, label: "장면 나누기", structure: true }); }
+    catch (error) { setNotice((error as Error).message); }
+  };
+
+  const combineScene = (projectId: string, sceneId: string, nextId: string) => {
+    const current = latestProjects.current.get(projectId);
+    if (!current) return;
+    try { void persist(mergeScene(current, sceneId, nextId), { base: current, label: "장면 합치기", structure: true }); }
     catch (error) { setNotice((error as Error).message); }
   };
 
@@ -377,7 +397,7 @@ function Studio() {
           {step === 2 && project && <ParseReview project={project} onChange={persist} onReparse={reparseSource} onError={setNotice} />}
           {step === 3 && project && <Preflight project={project} />}
           {step === 4 && project && <AssetStudio title="인물 기준 이미지" eyebrow="CHARACTER ANCHOR" description="얼굴 일관성을 위한 기준 이미지입니다. 업로드한 이미지가 있으면 생성 단계를 건너뛰어도 됩니다." asset={project.anchor} project={project} kind="anchor" onChange={(anchor, options) => persist({ ...project, anchor }, options)} />}
-          {step === 5 && project && <SceneStudio project={project} onChange={updateScene} onProjectChange={persist} onTimingChange={applyNarrationTiming} onMove={changeSceneOrder} onSplit={divideScene} />}
+          {step === 5 && project && <SceneStudio project={project} onChange={updateScene} onProjectChange={persist} onTimingChange={applyNarrationTiming} onMove={changeSceneOrder} onSplit={divideScene} onMerge={combineScene} />}
           {step === 6 && project && <AssetStudio title="썸네일 만들기" eyebrow="THUMBNAIL" description="대표 이미지를 선택하세요. 선택한 썸네일은 영상 마지막 인물 이름 화면의 배경에도 사용됩니다." asset={project.thumbnail} project={project} kind="thumbnail" onChange={(thumbnail, options) => persist({ ...project, thumbnail }, options)} />}
           {step === 7 && project && <ImageReview project={project} />}
           {step === 8 && project && <Complete project={project} onDownload={() => download(project)} />}
@@ -612,7 +632,7 @@ function BackgroundMusicPanel({ project, onChange }: { project: ProjectData; onC
   return <div className="panel background-music-panel"><div className="music-head"><Music2 size={20} /><div><strong>영상 배경음악</strong><small>음악 한 곡이 영상 전체에 반복됩니다. 장면마다 아래에서 볼륨을 조절하세요.</small></div><input ref={input} className="file-input" type="file" accept=".mp3,.wav,.m4a,.mp4,audio/mpeg,audio/wav,audio/mp4,video/mp4" aria-label="배경음악 파일 선택" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void upload(file); }} /><button className="btn ghost" disabled={busy} onClick={() => input.current?.click()}>{busy ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />}{project.background_music ? "음악 교체" : "음악 업로드"}</button></div>{project.background_music && <div className="music-file"><span>{project.background_music.name}</span>{previewUrl && <audio controls preload="metadata" src={previewUrl} aria-label="배경음악 미리듣기" />}<button className="btn ghost" disabled={busy} onClick={remove}><Trash2 size={15} /> 제거</button></div>}<small className="music-hint">MP3·WAV·M4A·MP4(MPEG-4), 100MB·15분 이하 · 사용 권한이 있는 음악을 선택해 주세요.</small>{error && <div className="error-banner">{error}</div>}</div>;
 }
 
-function SceneStudio({ project, onChange, onProjectChange, onTimingChange, onMove, onSplit }: { project: ProjectData; onChange: (scene: Scene, options?: EditOptions) => void; onProjectChange: (project: ProjectData) => Promise<void>; onTimingChange: (request: TimingRequest) => void; onMove: (projectId: string, sceneId: string, direction: -1 | 1) => void; onSplit: (projectId: string, sceneId: string, captionId: string) => void }) {
+function SceneStudio({ project, onChange, onProjectChange, onTimingChange, onMove, onSplit, onMerge }: { project: ProjectData; onChange: (scene: Scene, options?: EditOptions) => void; onProjectChange: (project: ProjectData) => Promise<void>; onTimingChange: (request: TimingRequest) => void; onMove: (projectId: string, sceneId: string, direction: -1 | 1) => void; onSplit: (projectId: string, sceneId: string, captionId: string) => void; onMerge: (projectId: string, sceneId: string, nextId: string) => void }) {
   const scenes = orderedScenes(project);
   const [active, setActive] = useState(scenes[0]?.id || "");
   const [error, setError] = useState("");
@@ -695,6 +715,7 @@ function SceneStudio({ project, onChange, onProjectChange, onTimingChange, onMov
     <nav className="scene-navigation" aria-label="장면 이동"><button className="btn ghost scene-nav-button" disabled={position === 0} onClick={() => switchScene(scenes[position - 1].id)}><ArrowLeft size={15} /> 이전 Scene</button><div className="scene-tabs">{scenes.map((item) => <button key={item.id} className={item.id === scene.id ? "active" : ""} aria-current={item.id === scene.id ? "step" : undefined} onClick={() => switchScene(item.id)}><span>{item.number}</span>{item.title}{item.selected_candidate_id && <Check size={13} aria-label="화면 선택됨" />}{hasSceneNarration(item) && <Mic size={12} aria-label="녹음 있음" />}</button>)}</div><button className="btn primary scene-nav-button" disabled={position === scenes.length - 1} onClick={() => switchScene(scenes[position + 1].id)}>다음 Scene <ArrowRight size={15} /></button></nav>
     <div className="scene-title"><div><span>SCENE {String(scene.number).padStart(2, "0")}</span><h3>{scene.title}</h3></div><div className="scene-order-controls" role="group" aria-label="장면 순서 변경"><small aria-live="polite">전체 {scenes.length}개 중 {position + 1}번째</small><button type="button" className="btn ghost" aria-label="이 장면을 앞으로 이동" disabled={position === 0} onClick={() => onMove(project.id, scene.id, -1)}><ArrowUp size={15} /> 순서 앞으로</button><button type="button" className="btn ghost" aria-label="이 장면을 뒤로 이동" disabled={position === scenes.length - 1} onClick={() => onMove(project.id, scene.id, 1)}><ArrowDown size={15} /> 순서 뒤로</button></div></div>
     <SceneSplitPanel key={scene.id} project={project} scene={scene} onSplit={onSplit} />
+    <SceneMergePanel project={project} scene={scene} onMerge={onMerge} />
     {project.schema_version !== 1 && <div className="panel scene-context"><div className="scene-context-head"><span>{scene.start_sec}–{scene.end_sec}초</span>{isCoreScene(project, scene) && <em>★ 핵심 업적 · {project.source?.core_achievement.title}</em>}</div><p><b>내레이션</b> {scene.narration}</p><p><b>장면 설명</b> {scene.scene_description}</p><p><b>화면 구성</b> {scene.visual_type} · {scene.shot_type} · {scene.location}</p><p><b>대상과 행동</b> {scene.main_subject} · {scene.main_action}</p>{scene.overlay_required && <p><b>역사 자료 오버레이</b> {scene.overlay_type} · {scene.overlay_note}</p>}</div>}
     <div className="scene-workspace"><div className="scene-workspace-controls">
     <PromptEditor heading="장면 내용 (수정 가능)" value={scene.prompt} historyCount={scene.prompt_history.length} onChange={(prompt) => { setCopied(false); onChange({ ...scene, prompt }); }} onGenerate={generate} onUpload={upload} generating={scene.status === "generating"} uploading={uploading} generateCount={project.schema_version !== 1 ? 2 : 3} />
@@ -702,7 +723,7 @@ function SceneStudio({ project, onChange, onProjectChange, onTimingChange, onMov
     <div className="panel full-prompt-panel"><div className="full-prompt-head"><div><strong>복사용 전체 이미지 프롬프트</strong><small>장면 내용 + 인물 외형 기준 + 공통 스타일이 항상 함께 들어갑니다.</small></div><button className="btn ghost" disabled={!scene.prompt.trim()} onClick={copyFullPrompt}>{copied ? <Check size={16} /> : <Copy size={16} />}{copied ? "복사됨" : "전체 프롬프트 복사"}</button></div><textarea aria-label="복사용 전체 이미지 프롬프트" readOnly value={fullPrompt} /></div>
     {project.schema_version === "2.1" ? <V21CaptionEditor scene={scene} sourceMotion={project.source?.scenes.find((item) => item.id === (scene.source_scene_id || scene.id))?.motion} onChange={onChange} /> : <div className="panel caption-panel"><label><strong>영상 자막</strong><small>이 문장이 장면 이미지 위에 표시됩니다.</small><textarea aria-label="영상 자막" value={scene.caption ?? scene.title} onChange={(event) => onChange({ ...scene, caption: event.target.value })} /></label><label className="duration-label"><strong>표시 시간 (초)</strong><input aria-label="장면 표시 시간" type="number" min="1" max="120" step="1" disabled={project.schema_version === "2.0"} title={project.schema_version === "2.0" ? "v2 시간은 APP_DATA의 시작·종료 시간을 따릅니다." : undefined} value={scene.duration ?? 10} onChange={(event) => onChange({ ...scene, duration: Number(event.target.value) })} /></label><label className="motion-label"><strong>이미지 효과</strong><small>MP4에 적용됩니다.</small><select aria-label="이미지 효과" value={scene.motion ?? "auto"} onChange={(event) => onChange({ ...scene, motion: event.target.value as ImageMotion })}><option value="auto">자동 (장면마다 다르게)</option><option value="zoom-in">천천히 줌인</option><option value="zoom-out">천천히 줌아웃</option><option value="pan-left">왼쪽으로 이동</option><option value="pan-right">오른쪽으로 이동</option><option value="pan-up">위로 이동</option><option value="pan-down">아래로 이동</option><option value="none">효과 없음</option></select></label></div>}
     <SceneNarrationPanel key={`${project.id}:${scene.id}`} project={project} scene={scene} onChange={onChange} onTimingChange={onTimingChange} />
-    <div className="panel music-volume-panel"><label><strong>이 장면의 배경음악 볼륨</strong><small>{project.background_music ? "장면이 바뀔 때 볼륨도 부드럽게 바뀝니다." : "음악을 추가하면 이 설정이 적용됩니다."}</small><input aria-label="장면 배경음악 볼륨" type="range" min="0" max="100" step="1" value={sceneMusicVolume(scene.music_volume)} onChange={(event) => onChange({ ...scene, music_volume: Number(event.target.value) })} /></label><output>{sceneMusicVolume(scene.music_volume)}%</output></div>
+    <div className="panel music-volume-panel"><label><strong>이 장면의 배경음악 볼륨</strong><small>{scene.composition?.visuals.some(section => section.presentation) ? "구간별 볼륨을 유지합니다. 슬라이더를 바꾸면 이 장면 전체에 적용됩니다." : project.background_music ? "장면이 바뀔 때 볼륨도 부드럽게 바뀝니다." : "음악을 추가하면 이 설정이 적용됩니다."}</small><input aria-label="장면 배경음악 볼륨" type="range" min="0" max="100" step="1" value={sceneMusicVolume(scene.music_volume)} onChange={(event) => onChange({ ...scene, music_volume: Number(event.target.value) })} /></label><output>{sceneMusicVolume(scene.music_volume)}%</output></div>
     {error && <div className="error-banner">{error}</div>}
     <CandidateGrid candidates={scene.candidates} selected={scene.selected_candidate_id} onSelect={(id) => onChange({ ...scene, selected_candidate_id: id })} onDelete={(id) => removeCandidate(id)} emptyLabel="이 장면의 이미지나 동영상을 업로드해 보세요" />
     {project.schema_version !== 1 && neighbors.length > 0 && <details className="panel neighbor-panel"><summary>인접 장면 비교 <small>필요할 때 펼쳐보기</small></summary><div className="neighbor-grid">{neighbors.map((item) => { const image = item.candidates.find((candidate) => candidate.id === item.selected_candidate_id); return <div key={item.id}>{image ? <img src={image.preview_url} alt={`${item.title} 선택 이미지`} /> : <div className="neighbor-empty">아직 이미지 없음</div>}<small>{item.source_scene_id} · {item.title}</small></div>; })}</div></details>}
@@ -716,7 +737,7 @@ function SceneStudio({ project, onChange, onProjectChange, onTimingChange, onMov
 function V21CaptionEditor({ scene, sourceMotion, onChange }: { scene: Scene; sourceMotion?: string; onChange: (scene: Scene) => void }) {
   const editBlock = (index: number, patch: Partial<NonNullable<Scene["captions"]>[number]>) => onChange({ ...scene, captions: (scene.captions || []).map((block, position) => position === index ? { ...block, ...patch } : block) });
   return <div className="panel v21-caption-panel">
-    <label><strong>강조 자막 · subtitle (선택)</strong><small>비워두면 강조 문구 없이 아래 전체 자막만 표시됩니다.</small><textarea aria-label="강조 자막" value={scene.subtitle || ""} onChange={(event) => onChange({ ...scene, subtitle: event.target.value, title: event.target.value.trim() || `Scene ${String(scene.number).padStart(2, "0")}` })} /></label>
+    <label><strong>강조 자막 · subtitle (선택)</strong><small>{scene.composition?.visuals.some(section => section.presentation) ? "구간별 강조 문구를 유지합니다. 입력하면 이 장면 전체에 적용됩니다." : "비워두면 강조 문구 없이 아래 전체 자막만 표시됩니다."}</small><textarea aria-label="강조 자막" value={scene.subtitle || ""} onChange={(event) => onChange({ ...scene, subtitle: event.target.value, title: event.target.value.trim() || `Scene ${String(scene.number).padStart(2, "0")}` })} /></label>
     <div className="caption-blocks"><strong>전체 내레이션 자막 · captions {scene.captions?.length || 0}개</strong><small>Work가 나눈 의미 단위와 표시 시간을 그대로 사용합니다. MP4 하단에 순서대로 나타납니다.</small>{scene.captions?.map((block, index) => <div className="caption-block-row" key={block.id || index}><span>{index + 1}</span><textarea aria-label={`Caption ${index + 1} 텍스트`} value={block.text} onChange={(event) => editBlock(index, { text: event.target.value })} /><label>시작<input aria-label={`Caption ${index + 1} 시작`} type="number" step="0.1" value={block.start_sec} onChange={(event) => editBlock(index, { start_sec: Number(event.target.value) })} /></label><label>종료<input aria-label={`Caption ${index + 1} 종료`} type="number" step="0.1" value={block.end_sec} onChange={(event) => editBlock(index, { end_sec: Number(event.target.value) })} /></label></div>)}</div>
     <div className="caption-settings"><span>표시 시간: {scene.duration}초 (현재 편집 기준)</span><label><strong>영상 움직임 · motion</strong><small>이미지 구도 · shot_type: {scene.shot_type || "미지정"} (이미지 프롬프트에 적용)</small>{sourceMotion && <small>제작안 원문 움직임: {sourceMotion}</small>}<select aria-label="이미지 효과" value={scene.motion ?? "auto"} onChange={(event) => onChange({ ...scene, motion: event.target.value as ImageMotion })}><option value="auto">자동 (기본 움직임)</option><option value="zoom-in">줌인</option><option value="zoom-out">줌아웃</option><option value="pan-left">왼쪽으로 이동</option><option value="pan-right">오른쪽으로 이동</option><option value="pan-up">위로 이동</option><option value="pan-down">아래로 이동</option><option value="none">효과 없음</option></select></label></div>
   </div>;

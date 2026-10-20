@@ -14,7 +14,7 @@ export function narrationTimeline(project: ProjectData, sceneId?: string): Narra
     const origin = sceneId ? 0 : OPENING_DURATION + entry.start;
     for (const clip of sceneComposition(entry.scene).narrations) {
       const next = { ...clip, id: `${entry.scene.id}:${clip.id}`, scene_id: entry.scene.id,
-        start_sec: origin + clip.start_sec + (clip.timeline_offset_sec ?? 0), end_sec: origin + clip.end_sec + (clip.timeline_offset_sec ?? 0), limit: origin + entry.duration };
+        start_sec: origin + clip.start_sec + (clip.timeline_offset_sec ?? 0), end_sec: origin + clip.end_sec + (clip.timeline_offset_sec ?? 0), limit: origin + Math.min(entry.duration, clip.playback_end_sec ?? entry.duration) };
       const previous = tracks.at(-1);
       if (previous && clip.continuity_id && previous.continuity_id === clip.continuity_id && previous.asset_id === clip.asset_id
         && Math.abs(previous.source_end_sec - clip.source_start_sec) < 0.00001 && Math.abs(previous.end_sec - next.start_sec) <= 1 / VIDEO_FPS + 0.001) {

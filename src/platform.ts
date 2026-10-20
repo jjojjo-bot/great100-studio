@@ -237,7 +237,7 @@ export async function deleteProject(project: ProjectData): Promise<string | unde
   const media = tx.objectStore("media");
   const narrationKeys = (await audio.getAllKeys()).filter((key) => typeof key === "string" && (key.startsWith(`${project.id}:narration:`) || key.startsWith(`${project.id}:music:`)));
   const mediaKeys = (await media.getAllKeys()).filter((key) => typeof key === "string" && key.startsWith(`${project.id}:scene-video:`));
-  await Promise.all([tx.objectStore("projects").delete(project.id), tx.objectStore("videos").delete(project.id), ...[0, 1, 2, 3].map(version => tx.objectStore("settings").delete(`editor-backup:${project.id}:${version}`)), audio.delete(project.id), ...narrationKeys.map((key) => audio.delete(key)), ...mediaKeys.map((key) => media.delete(key))]);
+  await Promise.all([tx.objectStore("projects").delete(project.id), tx.objectStore("videos").delete(project.id), ...[0, 1, 2, 3, 4].map(version => tx.objectStore("settings").delete(`editor-backup:${project.id}:${version}`)), audio.delete(project.id), ...narrationKeys.map((key) => audio.delete(key)), ...mediaKeys.map((key) => media.delete(key))]);
   await tx.done;
 }
 

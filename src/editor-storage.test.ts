@@ -6,11 +6,26 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { editorProject } from "../tests/fixtures/editor-project";
 import { buildProjectZip, deleteProject, listProjects, saveProject } from "./platform";
 import { splitScene } from "./scene-split";
+import { mergeScene } from "./scene-merge";
+import { mergeProject } from "../tests/fixtures/merge-project";
 
 const native = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: native.invoke }));
 beforeEach(() => { vi.stubGlobal("window", {}); vi.stubGlobal("indexedDB", new IDBFactory()); native.invoke.mockReset(); });
 afterEach(() => vi.unstubAllGlobals());
+
+it("backs up before merging and preserves v5, source and both media tracks on reopen", async () => {
+  const original = mergeProject(); original.editor_version = 4;
+  await saveProject(original); const [before] = await listProjects();
+  const merged = mergeScene(before, "scene_01"); await saveProject(merged); await saveProject({ ...merged, ending_message: "수정" });
+  const db = await openDB("great100-studio", 6);
+  expect((await db.get("settings", `editor-backup:${original.id}:4`)).scenes).toEqual(before.scenes);
+  const [reopened] = await listProjects(); expect(reopened.editor_version).toBe(5);
+  expect(reopened.scenes[0].composition).toEqual(merged.scenes[0].composition); expect(reopened.source).toEqual(before.source);
+  expect(reopened.media).toEqual(before.media);
+  await expect(saveProject(before)).rejects.toThrow("더 최신");
+  await deleteProject(reopened); expect(await db.get("settings", `editor-backup:${original.id}:4`)).toBeUndefined(); db.close();
+});
 
 it("keeps the pre-split local backup once, reopens v4 and rejects a v3 overwrite", async () => {
   const project = editorProject(); project.editor_version = 3; project.media = { assets: [] };
@@ -67,7 +82,7 @@ it("backs up a legacy project on first save, preserves editor fields on reopen/Z
 });
 
 it("retains newer projects in the list but refuses to overwrite their format", async () => {
-  const project = { ...editorProject(), editor_version: 5 };
+  const project = { ...editorProject(), editor_version: 6 };
   await listProjects();
   const db = await openDB("great100-studio", 6);
   await db.put("projects", project);

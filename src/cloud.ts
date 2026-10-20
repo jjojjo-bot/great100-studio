@@ -177,8 +177,9 @@ export async function saveCloudProject(project: ProjectData): Promise<void> {
     }
     // Never persist temporary signed URLs or UI-only revision fields in JSONB.
     const { cloud_owner_id: _owner, cloud_version: _version, ...data } = snapshot;
-    const rpc = (snapshot.editor_version ?? 0) >= 4 ? "great100_save_structured_project" : (snapshot.editor_version ?? 0) >= 3 ? "great100_save_media_project" : (snapshot.editor_version ?? 0) >= 2 ? "great100_save_timed_project" : "great100_save_editor_project";
+    const rpc = (snapshot.editor_version ?? 0) >= 5 ? "great100_save_merged_project" : (snapshot.editor_version ?? 0) >= 4 ? "great100_save_structured_project" : (snapshot.editor_version ?? 0) >= 3 ? "great100_save_media_project" : (snapshot.editor_version ?? 0) >= 2 ? "great100_save_timed_project" : "great100_save_editor_project";
     const result = await context.client.rpc(rpc, { p_id: snapshot.id, p_data: data, p_expected_version: expected });
+    if (result.error?.code === "PGRST202" && (snapshot.editor_version ?? 0) >= 5) throw new Error("장면 합치기 저장 설정이 필요합니다. DB의 장면 합치기 업데이트를 적용해 주세요.");
     if (result.error?.code === "PGRST202" && (snapshot.editor_version ?? 0) >= 4) throw new Error("장면 구조 저장 설정이 필요합니다. DB의 장면 나누기 업데이트를 적용해 주세요.");
     if (result.error?.code === "PGRST202" && (snapshot.editor_version ?? 0) >= 3) throw new Error("자료 구간 저장 설정이 필요합니다. DB의 자료 구성 업데이트를 적용해 주세요.");
     if (result.error) throw databaseError(result.error);

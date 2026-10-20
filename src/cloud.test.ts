@@ -9,6 +9,9 @@ import { proposeNarrationTiming } from "./timeline";
 import { moveScene } from "./scene-order";
 import { prepareEditorWrite } from "./editor-format";
 import { splitScene } from "./scene-split";
+import { mergeScene } from "./scene-merge";
+import { mergeProject } from "../tests/fixtures/merge-project";
+import { allCandidates } from "./media-composition";
 
 const userId = "alice";
 const session = { user: { id: userId }, access_token: "alice-token" } as Session;
@@ -22,6 +25,35 @@ beforeEach(() => {
   setCloudSession({ auth: { getSession }, rpc, from } as unknown as SupabaseClient, session);
 });
 afterEach(() => { setCloudSession(null, null); vi.unstubAllGlobals(); });
+
+it("round-trips merged presentation and voice windows through v5 with serialized revisions", async () => {
+  const draft = { ...mergeProject(), cloud_owner_id: userId, cloud_version: 0 };
+  for (const candidate of allCandidates(draft)) { candidate.storage_key = `private-${candidate.id}`; candidate.preview_url = "https://signed"; if (candidate.media_type === "video") candidate.preview_storage_key = "poster"; }
+  for (const asset of draft.media!.assets) { asset.storage_key = `private-${asset.id.replace(/^candidate:/, "")}`; if (asset.kind === "video") asset.preview_storage_key = "poster"; }
+  for (const scene of draft.scenes) if (scene.narration_audio) scene.narration_audio.storage_key = `private-narration:${scene.narration_audio.id}`;
+  let revision = 0;
+  rpc.mockImplementation(async (_name, input) => { expect(input.p_expected_version).toBe(revision); return { data: [{ version: ++revision }], error: null }; });
+  const next = mergeScene(draft, "scene_01"); await Promise.all([saveCloudProject(draft), saveCloudProject(next)]);
+  expect(rpc.mock.calls.map(call => call[0])).toEqual(["great100_save_media_project", "great100_save_merged_project"]);
+  const stored = rpc.mock.calls.at(-1)![1].p_data;
+  expect(stored.scenes[0].composition.visuals.map((section: { presentation: { music_volume: number } }) => section.presentation.music_volume)).toEqual([10, 90]);
+  expect(stored.scenes[0].composition.narrations[1].playback_end_sec).toBeCloseTo(3.4);
+  expect(stored.source).toEqual(draft.source);
+  vi.stubGlobal("fetch", vi.fn(async (_url, options) => {
+    const body = JSON.parse(options.body);
+    return Response.json({ urls: Object.fromEntries(body.keys.map((key: string) => [key, `https://signed/${key}`])) });
+  }));
+  const query = { select: () => query, eq: () => query, order: async () => ({ data: [{ id: draft.id, owner_id: userId, data: stored, version: 2 }], error: null }) }; from.mockReturnValue(query);
+  expect((await listCloudProjects())[0].scenes[0].composition).toEqual(stored.scenes[0].composition);
+  await expect(saveCloudProject({ ...draft, editor_version: 4 })).rejects.toThrow("더 최신");
+});
+
+it("requires the merge migration instead of falling back to v4", async () => {
+  const draft = { ...editorProject(), cloud_owner_id: userId, cloud_version: 0, editor_version: 5, media: { assets: [] } };
+  rpc.mockResolvedValue({ data: null, error: { code: "PGRST202" } });
+  await expect(saveCloudProject(draft)).rejects.toThrow("장면 합치기 저장 설정");
+  expect(rpc.mock.calls.map(call => call[0])).toEqual(["great100_save_merged_project"]);
+});
 
 it("round-trips split windows through the v4 RPC and refuses an obsolete v3 writer", async () => {
   const draft = { ...editorProject(), cloud_owner_id: userId, cloud_version: 0 };
@@ -89,7 +121,7 @@ it("round-trips editor metadata and unknown fields through the version-aware JSO
   const [reopened] = await listCloudProjects();
   expect(reopened).toMatchObject({ editor_version: 1, editor: draft.editor, extra: draft.extra, source: draft.source });
   expect(reopened.scenes[0].captions).toEqual(draft.scenes[0].captions);
-  await expect(saveCloudProject({ ...draft, editor_version: 5 })).rejects.toThrow("새로운 편집 형식");
+  await expect(saveCloudProject({ ...draft, editor_version: 6 })).rejects.toThrow("새로운 편집 형식");
   await expect(saveCloudProject({ ...draft, source_text: "다른 제작안" })).rejects.toThrow("원본 제작안");
   expect(rpc).toHaveBeenCalledTimes(1);
 });

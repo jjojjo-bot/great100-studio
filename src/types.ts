@@ -38,6 +38,7 @@ export interface Scene {
   narration_audio?: SceneNarrationAudio;
   composition?: SceneComposition;
   split_origin?: { parent_scene_id: string; origin_scene_id: string; start_sec: number; end_sec: number };
+  merge_origin?: { scene_ids: string[] };
   emphasis_offset_sec?: number;
   prompt: string;
   full_prompt?: string;
@@ -123,6 +124,7 @@ export interface VisualSection {
   motion_end?: number;
   playback_offset_sec?: number;
   presentation_duration_sec?: number;
+  presentation?: { title: string; subtitle: string; emphasis_offset_sec: number; music_volume: number };
 }
 
 export interface AudioClip {
@@ -134,11 +136,12 @@ export interface AudioClip {
   source_end_sec: number;
   continuity_id?: string;
   timeline_offset_sec?: number;
+  playback_end_sec?: number;
 }
 
 export interface SceneComposition {
   mode?: "segments";
-  controls?: { duration: number; selected?: string; support?: string; motion?: ImageMotion; narration?: string; narration_duration?: number };
+  controls?: { duration: number; selected?: string; support?: string; motion?: ImageMotion; narration?: string; narration_duration?: number; subtitle?: string; music_volume?: number };
   // Identifies the legacy controls which produced this composition. Merely
   // changing a scene number, caption or absolute time does not rebuild it.
   source_signature: string;
