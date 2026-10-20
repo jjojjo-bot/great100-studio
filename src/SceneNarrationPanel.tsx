@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { LoaderCircle, Mic, Square, Trash2, Upload } from "lucide-react";
+import { Check, Copy, LoaderCircle, Mic, Square, Trash2, Upload } from "lucide-react";
 import { discardSceneNarration, getSceneNarration, inspectSceneNarration, removeSceneNarration, savePreparedNarration, type PreparedNarration } from "./platform";
 import { proposeNarrationTiming, timingFingerprint, type CaptionTimingMode, type TimingRequest } from "./timeline";
 import type { EditOptions } from "./editor-history";
@@ -7,7 +7,7 @@ import type { ProjectData, Scene, SceneNarrationAudio } from "./types";
 import { hasSceneNarration } from "./scene-audio";
 import { bindComposition, sceneComposition } from "./media-composition";
 import { SceneNarrationGenerator } from "./SceneNarrationGenerator";
-import type { GeneratedNarrationRequest } from "./narration-generation";
+import { narrationScript, type GeneratedNarrationRequest } from "./narration-generation";
 
 type Pending = { project: ProjectData; scene: Scene; duration: number; name: string; prepared?: PreparedNarration; saved?: SceneNarrationAudio };
 const seconds = (value: number) => `${Number(value.toFixed(3))}초`;
@@ -27,6 +27,7 @@ export function SceneNarrationPanel({ project, scene, onChange, onTimingChange, 
   const [elapsed, setElapsed] = useState(0);
   const [busy, setBusy] = useState(false);
   const [generationBusy, setGenerationBusy] = useState(false);
+  const [scriptCopied, setScriptCopied] = useState(false);
   const [error, setError] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
   const [pendingUrl, setPendingUrl] = useState("");
@@ -35,8 +36,16 @@ export function SceneNarrationPanel({ project, scene, onChange, onTimingChange, 
   const duration = scene.duration ?? 10;
   const hasNarration = hasSceneNarration(scene);
   const compositionKey = JSON.stringify(scene.composition?.narrations);
+  const script = narrationScript(scene);
+  const aiNarrationEnabled = import.meta.env.VITE_ENABLE_AI_NARRATION === "true";
   const setPending = (value: Pending | null) => { pendingRef.current = value; if (active.current) setPendingState(value); };
   const discard = (value: Pending) => value.saved ? discardSceneNarration(value.project, value.scene, value.saved).catch(() => {}) : Promise.resolve();
+
+  useEffect(() => { setScriptCopied(false); }, [script]);
+  const copyScript = async () => {
+    try { await navigator.clipboard.writeText(script); setScriptCopied(true); }
+    catch { setError("대본을 복사하지 못했습니다. 자막 편집에서 문구를 선택해 복사해 주세요."); }
+  };
 
   useEffect(() => {
     let current = true;
@@ -171,6 +180,7 @@ export function SceneNarrationPanel({ project, scene, onChange, onTimingChange, 
     <div className="narration-actions"><input ref={input} className="file-input" type="file" disabled={blocked} accept=".mp3,.wav,.m4a,.mp4,.webm,audio/*,video/mp4" aria-label={`Scene ${scene.number} 내레이션 파일 선택`} onChange={event => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void upload(file); }} />
       {recording ? <button className="btn primary" onClick={() => recorder.current?.stop()}><Square size={15} /> 녹음 마치기 · {elapsed.toFixed(1)}초</button> : <button className="btn primary" disabled={blocked} onClick={() => void startRecording()}><Mic size={16} /> {hasNarration ? "다시 녹음" : "녹음 시작"}</button>}
       <button className="btn ghost" disabled={blocked} onClick={() => input.current?.click()}>{busy ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />} 파일 업로드</button>
+      <button className="btn ghost" disabled={!script} onClick={() => void copyScript()}>{scriptCopied ? <Check size={15} /> : <Copy size={15} />}{scriptCopied ? "대본 복사됨" : "내레이션 대본 복사"}</button>
       {scene.narration_audio && <button className="btn ghost" disabled={blocked} onClick={() => { setError(""); setMode("keep"); setPending({ project, scene, duration: scene.narration_audio!.duration_sec, name: scene.narration_audio!.name }); }}>녹음 길이에 맞추기</button>}
     </div>
     {scene.narration_audio && <div className="narration-file"><span>{scene.narration_audio.name} · {seconds(scene.narration_audio.duration_sec)}</span>{previewUrl && <audio controls preload="metadata" src={previewUrl} aria-label={`Scene ${scene.number} 내레이션 미리듣기`} />}<button className="btn ghost" disabled={blocked} onClick={() => void remove()}><Trash2 size={15} /> 제거</button></div>}
@@ -193,7 +203,7 @@ export function SceneNarrationPanel({ project, scene, onChange, onTimingChange, 
       <small>시간 변경은 실행 취소 한 번으로 되돌립니다. 적용한 녹음 파일은 보관됩니다.</small>
     </section>}
     <small className="narration-hint">MP3·WAV·M4A·MP4·WebM · 30MB·120초 이하. 긴 녹음은 저장 전 시간 조정안을 확인합니다. 목소리가 나올 때 배경음악은 자동으로 작아집니다.</small>
-    <SceneNarrationGenerator project={project} scene={scene} disabled={busy || recording || !!pending} onChange={onChange} onApply={onGeneratedNarration} onBusyChange={setGenerationBusy} />
+    {aiNarrationEnabled && <SceneNarrationGenerator project={project} scene={scene} disabled={busy || recording || !!pending} onChange={onChange} onApply={onGeneratedNarration} onBusyChange={setGenerationBusy} />}
     {error && <div className="error-banner" role="alert">{error}</div>}
   </div>;
 }

@@ -18,6 +18,7 @@ let generation: NarrationGeneration;
 const recording = { id: "generated", name: "ai.mp3", path: "generated.mp3", mime_type: "audio/mpeg", duration_sec: 14 };
 const file = () => new File(["voice"], "ai.mp3", { type: "audio/mpeg" });
 beforeEach(() => {
+  vi.stubEnv("VITE_ENABLE_AI_NARRATION", "true");
   vi.clearAllMocks(); window.history.replaceState(null, "", "/"); vi.spyOn(window, "scrollTo").mockImplementation(() => {});
   vi.stubGlobal("URL", class extends URL { static createObjectURL = () => "blob:voice"; static revokeObjectURL = () => {}; });
   project = editorProject(); project.scenes[0].narration_audio = { ...recording, id: "old", path: "old.mp3", duration_sec: 3 };
@@ -26,7 +27,7 @@ beforeEach(() => {
   mock.inspect.mockImplementation(async (value: File) => ({ file: value, extension: "mp3", mime: "audio/mpeg", duration: 14 }));
   mock.generate.mockResolvedValue({ file: file(), generation });
 });
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 async function open() {
   render(<App />); fireEvent.click(await screen.findByRole("button", { name: "이어 작업하기" }));
   for (let i = 0; i < 3; i++) fireEvent.click(screen.getByRole("button", { name: "다음 단계" }));
@@ -106,4 +107,14 @@ it("does not accept a late result after cancelling generation waiting", async ()
   fireEvent.click(screen.getByRole("button", { name: "생성 대기 중단" }));
   await act(async () => finish({ file: file(), generation }));
   expect(screen.queryByRole("region", { name: "생성한 AI 음성 검토" })).toBeNull(); expect(mock.inspect).not.toHaveBeenCalled(); expect(mock.store).not.toHaveBeenCalled();
+});
+it("hides API generation by default and copies the current script for recording or external audio upload", async () => {
+  vi.stubEnv("VITE_ENABLE_AI_NARRATION", undefined);
+  const copy = vi.fn(async () => {}); Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: copy } });
+  await open();
+  expect(screen.queryByRole("region", { name: "AI 내레이션 생성" })).toBeNull();
+  expect(screen.getByRole("button", { name: "다시 녹음" })).toBeTruthy(); expect(screen.getByRole("button", { name: "파일 업로드" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "내레이션 대본 복사" }));
+  await screen.findByRole("button", { name: "대본 복사됨" }); expect(copy).toHaveBeenCalledWith(project.scenes[0].captions![0].text);
+  expect(mock.generate).not.toHaveBeenCalled();
 });
