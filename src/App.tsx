@@ -40,6 +40,7 @@ import { SceneReviewBoard } from "./SceneReviewBoard";
 import { SceneImageBatch } from "./SceneImageBatch";
 import { useSceneImageBatch, type SceneImageBatchController } from "./useSceneImageBatch";
 import { attachBatchImage, type BatchImageRequest } from "./scene-image-batch";
+import { applyComparedImage, type ImageComparisonRequest, type ImageComparisonResult } from "./image-comparison";
 import { createReviewView, type ReviewView } from "./scene-review";
 import { ScenePreviewPane } from "./SceneTimeline";
 import { SAMPLE_WORK_TEXT } from "./sample";
@@ -52,7 +53,7 @@ import { proposeNarrationTiming, timingFingerprint, type TimingRequest } from ".
 import { AccountMenu, AuthGate } from "./Auth";
 import { checkCloudStorage, cloudContext } from "./cloud";
 import { mergeProjectChanges } from "./project-changes";
-import { collectMediaAssets, prepareMediaProject } from "./media-composition";
+import { collectMediaAssets, prepareMediaProject, visualSelectionFingerprint } from "./media-composition";
 import { moveScene, orderedScenes } from "./scene-order";
 import { splitBoundaries, splitScene } from "./scene-split";
 import { mergeScene, sceneMergeTarget } from "./scene-merge";
@@ -348,6 +349,20 @@ function Studio() {
   };
   const batchImages = useSceneImageBatch(project, importBatchImage);
 
+  const confirmComparedImage = async (request: ImageComparisonRequest): Promise<ImageComparisonResult> => {
+    const current = latestProjects.current.get(request.projectId);
+    if (!current) throw new Error("이미지를 선택할 프로젝트를 찾지 못했습니다.");
+    const applied = applyComparedImage(current, request);
+    if (applied === current) return saveFailures.current.has(current.id) ? "unsaved" : "saved";
+    const next = prepareEditorWrite(applied);
+    assertEditorWrite(next, current);
+    const expected = visualSelectionFingerprint(next.scenes.find(scene => scene.id === request.sceneId)!);
+    await persist(next, { base: current, label: "비교 이미지 선택" });
+    const latest = latestProjects.current.get(request.projectId)?.scenes.find(scene => scene.id === request.sceneId);
+    if (!latest || visualSelectionFingerprint(latest) !== expected) return "changed";
+    return saveFailures.current.has(current.id) ? "unsaved" : "saved";
+  };
+
   const openReviewScene = (sceneId: string) => {
     if (!project) return;
     const current = latestProjects.current.get(project.id) || project;
@@ -441,7 +456,7 @@ function Studio() {
           {step === 4 && project && <AssetStudio title="인물 기준 이미지" eyebrow="CHARACTER ANCHOR" description="얼굴 일관성을 위한 기준 이미지입니다. 업로드한 이미지가 있으면 생성 단계를 건너뛰어도 됩니다." asset={project.anchor} project={project} kind="anchor" onChange={(anchor, options) => persist({ ...project, anchor }, options)} />}
           {step === 5 && project && <><div className="review-return-actions">{reviewView?.anchor && <button type="button" className="btn ghost" onClick={() => { reviewView.returning = true; setStep(7); }}><ArrowLeft size={15} /> 작업 보드로 돌아가기</button>}</div><SceneStudio key={project.id} project={project} activeSceneId={activeScenes[project.id]} onActiveSceneChange={id => setActiveScenes(previous => ({ ...previous, [project.id]: id }))} onChange={updateScene} onProjectChange={persist} onTimingChange={applyNarrationTiming} onGeneratedNarration={selectGeneratedNarration} onMove={changeSceneOrder} onSplit={divideScene} onMerge={combineScene} /></>}
           {step === 6 && project && <AssetStudio title="썸네일 만들기" eyebrow="THUMBNAIL" description="대표 이미지를 선택하세요. 선택한 썸네일은 영상 마지막 인물 이름 화면의 배경에도 사용됩니다." asset={project.thumbnail} project={project} kind="thumbnail" onChange={(thumbnail, options) => persist({ ...project, thumbnail }, options)} />}
-          {step === 7 && project && <ImageReview key={project.id} project={project} view={reviewView!} onOpenScene={openReviewScene} batch={batchImages} />}
+          {step === 7 && project && <ImageReview key={project.id} project={project} view={reviewView!} onOpenScene={openReviewScene} batch={batchImages} onCompareImage={confirmComparedImage} />}
           {step === 8 && project && <Complete project={project} onDownload={() => download(project)} />}
         </section>
 
@@ -568,11 +583,11 @@ function Preflight({ project }: { project: ProjectData }) {
   </div>;
 }
 
-function ImageReview({ project, view, onOpenScene, batch }: { project: ProjectData; view: ReviewView; onOpenScene: (sceneId: string) => void; batch: SceneImageBatchController }) {
+function ImageReview({ project, view, onOpenScene, batch, onCompareImage }: { project: ProjectData; view: ReviewView; onOpenScene: (sceneId: string) => void; batch: SceneImageBatchController; onCompareImage: (request: ImageComparisonRequest) => Promise<ImageComparisonResult> }) {
   const errors = completionErrors(project);
   return <div className="page"><PageHeading eyebrow="FINAL IMAGE REVIEW" title="전체 장면을 한 번 더 확인하세요" text="Scene 순서와 핵심 업적 장면, 썸네일을 검토한 뒤 MP4를 만듭니다." />
     <SceneImageBatch project={project} batch={batch} />
-    <SceneReviewBoard project={project} view={view} onOpenScene={onOpenScene} />
+    <SceneReviewBoard project={project} view={view} onOpenScene={onOpenScene} onCompareImage={onCompareImage} />
     <FullVideoPreview project={project} />
     <div className="panel"><h3>썸네일</h3>{project.thumbnail.candidates.find((candidate) => candidate.id === project.thumbnail.selected_candidate_id) ? <img className="review-thumbnail" src={project.thumbnail.candidates.find((candidate) => candidate.id === project.thumbnail.selected_candidate_id)!.preview_url} alt="선택 썸네일" /> : <p>선택된 썸네일이 없습니다.</p>}</div>
     {errors.length > 0 && <div className="error-banner"><strong>완료 전 확인할 항목</strong><ul>{errors.map((error, index) => <li key={index}>{error}</li>)}</ul></div>}

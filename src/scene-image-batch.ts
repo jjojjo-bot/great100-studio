@@ -1,5 +1,5 @@
 import { detectImageFormat } from "./image-format";
-import { collectMediaAssets, resolveVideoIntroImage, sceneComposition } from "./media-composition";
+import { collectMediaAssets, resolveVideoIntroImage, sceneComposition, visualSelectionFingerprint as batchVisualFingerprint } from "./media-composition";
 import type { ImageCandidate, ProjectData, Scene } from "./types";
 
 export const MAX_BATCH_IMAGES = 40;
@@ -18,9 +18,7 @@ export function suggestedSceneId(name: string, scenes: Scene[]): string {
   return matches.length === 1 ? matches[0].id : "";
 }
 
-export function batchVisualFingerprint(scene: Scene): string {
-  return JSON.stringify([scene.selected_candidate_id, scene.duration, scene.split_origin, scene.merge_origin, sceneComposition(scene).visuals]);
-}
+export { batchVisualFingerprint };
 
 export async function inspectBatchImage(file: File, decode: (file: File) => Promise<void> = decodeImage): Promise<void> {
   if (!file.size || file.size > 12_000_000) throw new Error("12MB 이하의 비어 있지 않은 이미지를 선택해 주세요.");

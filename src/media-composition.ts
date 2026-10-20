@@ -90,6 +90,12 @@ export function bindComposition(scene: Scene, composition: SceneComposition): Sc
   return { ...composition, mode: "segments", controls: compositionControls(scene), source_signature: compositionSignature(scene) };
 }
 
+// Review a visual choice against the same scene after asynchronous work. Scene
+// numbering and unrelated text edits do not invalidate the reviewed screen.
+export function visualSelectionFingerprint(scene: Scene): string {
+  return JSON.stringify([scene.selected_candidate_id, scene.duration, scene.split_origin, scene.merge_origin, sceneComposition(scene).visuals]);
+}
+
 export function cropComposition(composition: SceneComposition, from: number, to: number, clock = (time: number) => time): SceneComposition {
   return { ...composition, visuals: composition.visuals.filter(section => section.end_sec > from && section.start_sec < to).map(section => {
     const start = Math.max(from, section.start_sec); const end = Math.min(to, section.end_sec);

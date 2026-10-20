@@ -2,8 +2,10 @@ import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, Clock3, Image as ImageIcon, Mic } from "lucide-react";
 import { matchesReviewFilter, REVIEW_FILTERS, reviewScenes, type ReviewFilter, type ReviewView, type SceneReview } from "./scene-review";
 import type { ProjectData } from "./types";
+import { ImageComparison } from "./ImageComparison";
+import { imageCandidates, type ImageComparisonRequest, type ImageComparisonResult } from "./image-comparison";
 
-function ReviewCard({ item, onOpen }: { item: SceneReview; onOpen: () => void }) {
+function ReviewCard({ item, onOpen, onCompare }: { item: SceneReview; onOpen: () => void; onCompare: () => void }) {
   const [failedImage, setFailedImage] = useState("");
   return <article className="panel review-image-card scene-review-card" data-scene-id={item.scene.id} aria-label={`Scene ${item.scene.number} 작업 상태`}>
     <div className="scene-review-image">{item.previewUrl && failedImage !== item.previewUrl ? <img src={item.previewUrl} loading="lazy" alt={`Scene ${item.scene.number} 대표 화면`} onError={() => setFailedImage(item.previewUrl!)} /> : <div className="candidate-empty"><ImageIcon size={24} /><span>{item.hasVisual ? "미리보기 없음" : "화면 미선택"}</span></div>}</div>
@@ -18,13 +20,15 @@ function ReviewCard({ item, onOpen }: { item: SceneReview; onOpen: () => void })
     {!!item.timingIssues.length && <details className="scene-review-issues"><summary>시간 오류 {item.timingIssues.length}개</summary><ul>{item.timingIssues.map(issue => <li key={issue}>{issue}</li>)}</ul></details>}
     {!!item.mediaIssues.length && <p className="scene-review-note">{item.mediaIssues.join(" ")}</p>}
     {!!failedImage && failedImage === item.previewUrl && <p className="scene-review-note">미리보기를 불러오지 못했습니다. 장면 편집에서 자료를 확인해 주세요.</p>}
-    <button type="button" className="btn ghost" aria-label={`Scene ${item.scene.number} 편집`} onClick={onOpen}>장면 편집 <ArrowRight size={14} /></button>
+    <div className="scene-review-actions"><button type="button" className="btn ghost" aria-label={`Scene ${item.scene.number} 편집`} onClick={onOpen}>장면 편집 <ArrowRight size={14} /></button><button type="button" className="btn ghost" aria-label={`Scene ${item.scene.number} 후보 비교`} disabled={!imageCandidates(item.scene).length} onClick={onCompare}>후보 비교 · {imageCandidates(item.scene).length}장</button></div>
   </article>;
 }
 
-export function SceneReviewBoard({ project, view, onOpenScene }: { project: ProjectData; view: ReviewView; onOpenScene: (sceneId: string) => void }) {
+export function SceneReviewBoard({ project, view, onOpenScene, onCompareImage }: { project: ProjectData; view: ReviewView; onOpenScene: (sceneId: string) => void; onCompareImage: (request: ImageComparisonRequest) => Promise<ImageComparisonResult> }) {
   const [filter, setFilter] = useState<ReviewFilter>(view.filter);
   const [returned, setReturned] = useState(!!view.returning);
+  const [comparison, setComparison] = useState<{ sceneId: string; sceneIds: string[]; scrollY: number; offset: number }>();
+  const [comparisonMissing, setComparisonMissing] = useState(false);
   const region = useRef<HTMLElement>(null);
   const items = useMemo(() => reviewScenes(project), [project]);
   const visible = items.filter(item => matchesReviewFilter(item, filter));
@@ -46,16 +50,34 @@ export function SceneReviewBoard({ project, view, onOpenScene }: { project: Proj
     return () => { window.cancelAnimationFrame(frame); remember(); window.removeEventListener("scroll", remember); };
   }, [view]);
 
-  const selectFilter = (value: ReviewFilter) => { view.filter = value; view.anchor = undefined; setReturned(false); setFilter(value); };
+  const selectFilter = (value: ReviewFilter) => { view.filter = value; view.anchor = undefined; setReturned(false); setComparisonMissing(false); setFilter(value); };
   const open = (sceneId: string) => {
     const card = [...(region.current?.querySelectorAll<HTMLElement>("[data-scene-id]") || [])].find(item => item.dataset.sceneId === sceneId);
     view.scrollY = window.scrollY; view.anchor = { sceneId, offset: card?.getBoundingClientRect().top ?? 0 }; view.returning = true;
     onOpenScene(sceneId);
   };
+  const compare = (sceneId: string) => {
+    const card = [...(region.current?.querySelectorAll<HTMLElement>("[data-scene-id]") || [])].find(item => item.dataset.sceneId === sceneId);
+    setComparisonMissing(false);
+    setComparison({ sceneId, sceneIds: visible.map(item => item.scene.id), scrollY: window.scrollY, offset: card?.getBoundingClientRect().top ?? 0 });
+  };
+  const closeComparison = () => {
+    if (!comparison) return;
+    const saved = comparison;
+    setComparisonMissing(!visible.some(item => item.scene.id === saved.sceneId));
+    setComparison(undefined);
+    window.requestAnimationFrame(() => {
+      if (!region.current?.isConnected) return;
+      const card = [...region.current.querySelectorAll<HTMLElement>("[data-scene-id]")].find(item => item.dataset.sceneId === saved.sceneId);
+      window.scrollTo({ top: card ? window.scrollY + card.getBoundingClientRect().top - saved.offset : saved.scrollY, behavior: "instant" });
+      (card?.querySelector<HTMLButtonElement>("button[aria-label$='후보 비교']") || region.current.querySelector<HTMLButtonElement>("button[aria-pressed=true]"))?.focus({ preventScroll: true });
+    });
+  };
   return <section ref={region} className="scene-review-board" aria-label="장면 작업 보드">
     <div className="scene-review-heading"><div><h3>장면 작업 보드</h3><p>필요한 장면을 찾아 수정하고 이 보드로 돌아올 수 있습니다. 녹음은 선택 사항입니다.</p></div><span aria-live="polite">{visible.length} / {items.length}개 장면</span></div>
     <div className="scene-review-filters" role="group" aria-label="장면 상태 필터">{REVIEW_FILTERS.map(option => <button type="button" key={option.id} aria-pressed={filter === option.id} onClick={() => selectFilter(option.id)}>{option.label} <b>{items.filter(item => matchesReviewFilter(item, option.id)).length}</b></button>)}</div>
-    {anchorMissing && <p className="scene-review-return-note" role="status">수정한 장면이 현재 필터에 없거나 다른 장면과 합쳐졌습니다. 필터는 유지했습니다.</p>}
-    {visible.length ? <div className="review-image-grid">{visible.map(item => <ReviewCard key={item.scene.id} item={item} onOpen={() => open(item.scene.id)} />)}</div> : <div className="panel scene-review-empty"><p>이 조건에 해당하는 장면이 없습니다.</p><button type="button" className="btn ghost" onClick={() => selectFilter("all")}>모든 장면 보기</button></div>}
+    {(anchorMissing || comparisonMissing) && <p className="scene-review-return-note" role="status">수정한 장면이 현재 필터에 없거나 다른 장면과 합쳐졌습니다. 필터는 유지했습니다.</p>}
+    {visible.length ? <div className="review-image-grid">{visible.map(item => <ReviewCard key={item.scene.id} item={item} onOpen={() => open(item.scene.id)} onCompare={() => compare(item.scene.id)} />)}</div> : <div className="panel scene-review-empty"><p>이 조건에 해당하는 장면이 없습니다.</p><button type="button" className="btn ghost" onClick={() => selectFilter("all")}>모든 장면 보기</button></div>}
+    {comparison && <ImageComparison project={project} sceneId={comparison.sceneId} sceneIds={comparison.sceneIds} onSceneChange={sceneId => setComparison(previous => previous && { ...previous, sceneId })} onApply={onCompareImage} onClose={closeComparison} />}
   </section>;
 }
