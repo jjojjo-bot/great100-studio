@@ -6,7 +6,11 @@ import { composeScenePrompt, composeThumbnailPrompt, withFullImagePrompts } from
 import { inspectSceneVideo, validateSceneVideoFile } from "./scene-video";
 import { cloudContext, createCloudProject, deleteCloudProject, downloadCloudFile, getCloudRenderedVideo, listCloudProjects, nextCloudEpisode, readCloudProject, saveCloudProject, saveCloudRenderedVideo, uploadCloudFile } from "./cloud";
 import { cloudAccessToken } from "./cloud-session";
+import { detectImageFormat } from "./image-format";
+import { prepareReferenceImage } from "./reference-image";
 import type { BackgroundMusic, GenerateRequest, ImageCandidate, ProjectData, Scene, SceneNarrationAudio, VisualAsset } from "./types";
+
+export { detectImageFormat } from "./image-format";
 
 export const isTauri = () => "__TAURI_INTERNALS__" in window;
 const VIDEO_RENDER_VERSION = 8;
@@ -394,15 +398,26 @@ export async function generateImages(request: GenerateRequest): Promise<ImageCan
   });
 }
 
-type ImageLocation = Pick<GenerateRequest, "project_path" | "asset_kind" | "scene_number">;
-type ImageFormat = { mime: "image/png" | "image/jpeg" | "image/webp"; extension: "png" | "jpg" | "webp" };
-
-export function detectImageFormat(bytes: Uint8Array): ImageFormat | null {
-  if (bytes.length >= 8 && [137, 80, 78, 71, 13, 10, 26, 10].every((value, index) => bytes[index] === value)) return { mime: "image/png", extension: "png" };
-  if (bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return { mime: "image/jpeg", extension: "jpg" };
-  if (bytes.length >= 12 && String.fromCharCode(...bytes.slice(0, 4)) === "RIFF" && String.fromCharCode(...bytes.slice(8, 12)) === "WEBP") return { mime: "image/webp", extension: "webp" };
-  return null;
+export async function resolveReferenceImage(project: ProjectData): Promise<string | undefined> {
+  const candidate = project.anchor.candidates.find((item) => item.id === project.anchor.selected_candidate_id);
+  if (!candidate || candidate.mode === "mock" || candidate.media_type === "video") return undefined;
+  const context = !isTauri() ? cloudContext(project) : null;
+  let blob: Blob;
+  if (context && candidate.storage_key) {
+    // Resolve a fresh signed URL instead of reusing an expiring preview URL.
+    blob = await downloadCloudFile(project, candidate.storage_key);
+  } else if (candidate.preview_url.startsWith("data:image/")) {
+    // Local web and Tauri projects retain the full original image as a data URL.
+    const response = await fetch(candidate.preview_url);
+    if (!response.ok) throw new Error("기준 이미지 원본을 읽지 못했습니다. 다시 업로드해 주세요.");
+    blob = await response.blob();
+  } else {
+    throw new Error("기준 이미지 원본을 찾지 못했습니다. 작업을 다시 열거나 이미지를 업로드해 주세요.");
+  }
+  return prepareReferenceImage(blob);
 }
+
+type ImageLocation = Pick<GenerateRequest, "project_path" | "asset_kind" | "scene_number">;
 
 export async function importImageCandidates(files: File[], location: ImageLocation): Promise<ImageCandidate[]> {
   if (!files.length) return [];

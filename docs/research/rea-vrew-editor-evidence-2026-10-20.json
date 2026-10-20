@@ -1,0 +1,504 @@
+{
+  "date": "2026-10-20",
+  "subject": "Vrew undo/redo static entry points and Great100 first release",
+  "static_views": [
+    {
+      "evidence_id": "ev_bb57c4ee4e1b48202c5ee49f9e7652a2efc64a676118692f5937c20205438327",
+      "parent_evidence_id": "ev_f67eb1008c8b5787bdedbb23453173aa9a1657920e4efab437453ec6d18c94bd",
+      "item": {
+        "node_id": "jag_node_1a6d9804302cabf4dd1d42cf2b3a57665b0108d54d8f2f0d2810a3b8b552ee24",
+        "kind": "javascript-module",
+        "path": "scene-BoVf8rK7.js",
+        "identity": {
+          "strategy": "artifact-local-key",
+          "stability": "artifact-version",
+          "artifact_sha256": "9f5fe12164c66749ddfa9a59db8910c458641e75d07b56273ca51eb322a77fad",
+          "namespace": "module-export",
+          "key": "[\"f7220740af396297c720a02de0ae9137a07c7ec0c287daca87f77723184cc317\",\"scene-BoVf8rK7.js\",\"h3\"]"
+        },
+        "hashes": [],
+        "exports": [],
+        "source_ranges": [
+          {
+            "kind": "source-range",
+            "source": "scene-BoVf8rK7.js",
+            "start": {
+              "line": 4263,
+              "column": 53703
+            },
+            "end": {
+              "line": 4263,
+              "column": 53711
+            }
+          },
+          {
+            "kind": "source-range",
+            "source": "scene-BoVf8rK7.js",
+            "start": {
+              "line": 4262,
+              "column": 35406
+            },
+            "end": {
+              "line": 4262,
+              "column": 35625
+            }
+          }
+        ],
+        "observations": [
+          {
+            "observation_id": "jag_observation_6c3a1fdca1598ecf75157e2f03bb139ae30c14b573f4c7757d58d72bc1ce3ddd",
+            "label": "scene-BoVf8rK7.js:h3",
+            "properties": {
+              "semantic_role": "export-binding",
+              "module_path": "scene-BoVf8rK7.js",
+              "relationship_kind": "export",
+              "exported_name": "h3",
+              "local_name": "$k",
+              "imported_name": "$k",
+              "declared_specifier": null
+            },
+            "evidence": {
+              "authority": "ast-static-analysis",
+              "state": "observed",
+              "confidence": "exact",
+              "artifact": {
+                "available": true,
+                "artifact_id": "art_9f5fe12164c66749ddfa9a59db8910c458641e75d07b56273ca51eb322a77fad",
+                "sha256": "9f5fe12164c66749ddfa9a59db8910c458641e75d07b56273ca51eb322a77fad"
+              },
+              "location": {
+                "available": true,
+                "value": {
+                  "kind": "source-range",
+                  "source": "scene-BoVf8rK7.js",
+                  "start": {
+                    "line": 4263,
+                    "column": 53703
+                  },
+                  "end": {
+                    "line": 4263,
+                    "column": 53711
+                  }
+                }
+              },
+              "extractor": {
+                "name": "rea-javascript-artifact-reconstruction",
+                "version": "1",
+                "operation": "recover-module-export",
+                "executable_sha256": null
+              },
+              "coverage": {
+                "status": "complete",
+                "truncated": false,
+                "omitted_count": 0,
+                "limits": []
+              },
+              "limitations": [
+                "Cross-function mutation and dynamic property resolution remain unknown.",
+                "Local call, argument, return, and closure relations are static candidates and do not prove runtime invocation.",
+                "Promise ownership covers explicit unshadowed Promise construction, static factories, aggregation, chaining, and await syntax only.",
+                "Return sites include only direct callable returns; nested callable returns remain separate.",
+                "Values and aliases were recovered from inert syntax only; no JavaScript was executed."
+              ],
+              "evidence_ids": []
+            }
+          },
+          {
+            "observation_id": "jag_observation_9b40591d3469a17c2b126501aa0c9f2f73c74a92d5e70981d038afaf2785a3fc",
+            "label": "scene-BoVf8rK7.js:h3:return-shapes",
+            "properties": {
+              "semantic_role": "export-return-shapes",
+              "module_path": "scene-BoVf8rK7.js",
+              "exported_name": "h3",
+              "callable_id": "callable:function:2278819:2279038",
+              "callable_kind": "function",
+              "static_return_shapes": [
+                {
+                  "source_range": {
+                    "start": {
+                      "line": 4262,
+                      "column": 35409
+                    },
+                    "end": {
+                      "line": 4262,
+                      "column": 35625
+                    }
+                  },
+                  "value_status": "unknown",
+                  "fields": [
+                    {
+                      "path": "",
+                      "presence": "present",
+                      "state": "unknown",
+                      "value": null,
+                      "reason": "Unsupported ArrowFunctionExpression value."
+                    }
+                  ],
+                  "property_coverage": []
+                }
+              ],
+              "return_shape_coverage": {
+                "status": "complete",
+                "retained_return_sites": 1,
+                "omitted_return_sites": 0,
+                "omitted_fields": 0,
+                "omitted_property_coverage": 0,
+                "projection_complete": true
+              }
+            },
+            "evidence": {
+              "authority": "static-relationship-inference",
+              "state": "inferred",
+              "confidence": "high",
+              "artifact": {
+                "available": true,
+                "artifact_id": "art_9f5fe12164c66749ddfa9a59db8910c458641e75d07b56273ca51eb322a77fad",
+                "sha256": "9f5fe12164c66749ddfa9a59db8910c458641e75d07b56273ca51eb322a77fad"
+              },
+              "location": {
+                "available": true,
+                "value": {
+                  "kind": "source-range",
+                  "source": "scene-BoVf8rK7.js",
+                  "start": {
+                    "line": 4262,
+                    "column": 35406
+                  },
+                  "end": {
+                    "line": 4262,
+                    "column": 35625
+                  }
+                }
+              },
+              "extractor": {
+                "name": "rea-javascript-artifact-reconstruction",
+                "version": "1",
+                "operation": "recover-export-return-shapes",
+                "executable_sha256": null
+              },
+              "coverage": {
+                "status": "complete",
+                "truncated": false,
+                "omitted_count": 0,
+                "limits": []
+              },
+              "limitations": [
+                "Cross-function mutation and dynamic property resolution remain unknown.",
+                "Local call, argument, return, and closure relations are static candidates and do not prove runtime invocation.",
+                "Promise ownership covers explicit unshadowed Promise construction, static factories, aggregation, chaining, and await syntax only.",
+                "Return shapes are inferred from inert syntax and do not prove runtime behavior.",
+                "Return sites include only direct callable returns; nested callable returns remain separate.",
+                "Static syntax does not prove that this relationship executes at runtime.",
+                "Values and aliases were recovered from inert syntax only; no JavaScript was executed."
+              ],
+              "evidence_ids": []
+            }
+          }
+        ]
+      }
+    },
+    {
+      "evidence_id": "ev_d228ba4e02f6af351da63691252077cc711a0b37a37969969f8a48e47e18a9e1",
+      "parent_evidence_id": "ev_f67eb1008c8b5787bdedbb23453173aa9a1657920e4efab437453ec6d18c94bd",
+      "item": {
+        "node_id": "jag_node_4db2ec84bcf425f40ce08abfa547196f83b908c41658547e4c9f251400a021e6",
+        "kind": "javascript-module",
+        "path": "scene-BoVf8rK7.js",
+        "identity": {
+          "strategy": "artifact-local-key",
+          "stability": "artifact-version",
+          "artifact_sha256": "9f5fe12164c66749ddfa9a59db8910c458641e75d07b56273ca51eb322a77fad",
+          "namespace": "module-export",
+          "key": "[\"f7220740af396297c720a02de0ae9137a07c7ec0c287daca87f77723184cc317\",\"scene-BoVf8rK7.js\",\"S0\"]"
+        },
+        "hashes": [],
+        "exports": [],
+        "source_ranges": [
+          {
+            "kind": "source-range",
+            "source": "scene-BoVf8rK7.js",
+            "start": {
+              "line": 4263,
+              "column": 44611
+            },
+            "end": {
+              "line": 4263,
+              "column": 44620
+            }
+          },
+          {
+            "kind": "source-range",
+            "source": "scene-BoVf8rK7.js",
+            "start": {
+              "line": 4262,
+              "column": 35630
+            },
+            "end": {
+              "line": 4262,
+              "column": 35890
+            }
+          }
+        ],
+        "observations": [
+          {
+            "observation_id": "jag_observation_742ff7e677b1f7dd876eede910c9d56a3752edc0bec3d624f5624b01139cac53",
+            "label": "scene-BoVf8rK7.js:S0",
+            "properties": {
+              "semantic_role": "export-binding",
+              "module_path": "scene-BoVf8rK7.js",
+              "relationship_kind": "export",
+              "exported_name": "S0",
+              "local_name": "AYe",
+              "imported_name": "AYe",
+              "declared_specifier": null
+            },
+            "evidence": {
+              "authority": "ast-static-analysis",
+              "state": "observed",
+              "confidence": "exact",
+              "artifact": {
+                "available": true,
+                "artifact_id": "art_9f5fe12164c66749ddfa9a59db8910c458641e75d07b56273ca51eb322a77fad",
+                "sha256": "9f5fe12164c66749ddfa9a59db8910c458641e75d07b56273ca51eb322a77fad"
+              },
+              "location": {
+                "available": true,
+                "value": {
+                  "kind": "source-range",
+                  "source": "scene-BoVf8rK7.js",
+                  "start": {
+                    "line": 4263,
+                    "column": 44611
+                  },
+                  "end": {
+                    "line": 4263,
+                    "column": 44620
+                  }
+                }
+              },
+              "extractor": {
+                "name": "rea-javascript-artifact-reconstruction",
+                "version": "1",
+                "operation": "recover-module-export",
+                "executable_sha256": null
+              },
+              "coverage": {
+                "status": "complete",
+                "truncated": false,
+                "omitted_count": 0,
+                "limits": []
+              },
+              "limitations": [
+                "Cross-function mutation and dynamic property resolution remain unknown.",
+                "Local call, argument, return, and closure relations are static candidates and do not prove runtime invocation.",
+                "Promise ownership covers explicit unshadowed Promise construction, static factories, aggregation, chaining, and await syntax only.",
+                "Return sites include only direct callable returns; nested callable returns remain separate.",
+                "Values and aliases were recovered from inert syntax only; no JavaScript was executed."
+              ],
+              "evidence_ids": []
+            }
+          },
+          {
+            "observation_id": "jag_observation_c185f0be726c317448c48460b90013fd7ea79d996cfc50d43050442598404dd0",
+            "label": "scene-BoVf8rK7.js:S0:return-shapes",
+            "properties": {
+              "semantic_role": "export-return-shapes",
+              "module_path": "scene-BoVf8rK7.js",
+              "exported_name": "S0",
+              "callable_id": "callable:function:2279043:2279303",
+              "callable_kind": "function",
+              "static_return_shapes": [
+                {
+                  "source_range": {
+                    "start": {
+                      "line": 4262,
+                      "column": 35634
+                    },
+                    "end": {
+                      "line": 4262,
+                      "column": 35890
+                    }
+                  },
+                  "value_status": "unknown",
+                  "fields": [
+                    {
+                      "path": "",
+                      "presence": "present",
+                      "state": "unknown",
+                      "value": null,
+                      "reason": "Unsupported ArrowFunctionExpression value."
+                    }
+                  ],
+                  "property_coverage": []
+                }
+              ],
+              "return_shape_coverage": {
+                "status": "complete",
+                "retained_return_sites": 1,
+                "omitted_return_sites": 0,
+                "omitted_fields": 0,
+                "omitted_property_coverage": 0,
+                "projection_complete": true
+              }
+            },
+            "evidence": {
+              "authority": "static-relationship-inference",
+              "state": "inferred",
+              "confidence": "high",
+              "artifact": {
+                "available": true,
+                "artifact_id": "art_9f5fe12164c66749ddfa9a59db8910c458641e75d07b56273ca51eb322a77fad",
+                "sha256": "9f5fe12164c66749ddfa9a59db8910c458641e75d07b56273ca51eb322a77fad"
+              },
+              "location": {
+                "available": true,
+                "value": {
+                  "kind": "source-range",
+                  "source": "scene-BoVf8rK7.js",
+                  "start": {
+                    "line": 4262,
+                    "column": 35630
+                  },
+                  "end": {
+                    "line": 4262,
+                    "column": 35890
+                  }
+                }
+              },
+              "extractor": {
+                "name": "rea-javascript-artifact-reconstruction",
+                "version": "1",
+                "operation": "recover-export-return-shapes",
+                "executable_sha256": null
+              },
+              "coverage": {
+                "status": "complete",
+                "truncated": false,
+                "omitted_count": 0,
+                "limits": []
+              },
+              "limitations": [
+                "Cross-function mutation and dynamic property resolution remain unknown.",
+                "Local call, argument, return, and closure relations are static candidates and do not prove runtime invocation.",
+                "Promise ownership covers explicit unshadowed Promise construction, static factories, aggregation, chaining, and await syntax only.",
+                "Return shapes are inferred from inert syntax and do not prove runtime behavior.",
+                "Return sites include only direct callable returns; nested callable returns remain separate.",
+                "Static syntax does not prove that this relationship executes at runtime.",
+                "Values and aliases were recovered from inert syntax only; no JavaScript was executed."
+              ],
+              "evidence_ids": []
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "additional_static_inspection": {
+    "method": "Babel AST parsing and source-range inspection of the same retained files; target code was not executed",
+    "source": "scene-BoVf8rK7.js",
+    "sha256": "9f5fe12164c66749ddfa9a59db8910c458641e75d07b56273ca51eb322a77fad",
+    "observations": [
+      {
+        "kind": "observed syntax",
+        "location": {
+          "line": 4262,
+          "column": 35403
+        },
+        "description": "Export h3 binds $k; its body dispatches ActionCreators.undo and branches on last action, playback flag and caption action category."
+      },
+      {
+        "kind": "observed syntax",
+        "location": {
+          "line": 4262,
+          "column": 35626
+        },
+        "description": "Export S0 binds AYe; its body reads snapshots.future and dispatches ActionCreators.redo with action/playback guards."
+      },
+      {
+        "kind": "observed syntax",
+        "location": {
+          "line": 82,
+          "column": 68090
+        },
+        "description": "Z0 reads the playing property. This is a playback guard; it does not establish an input-focus policy."
+      }
+    ]
+  },
+  "runtime_attempt": {
+    "status": "navigation_failed",
+    "provider": "rea-playwright-browser-scenario",
+    "cleanup": "terminated-owned-process",
+    "steps_executed": 0,
+    "observation": {
+      "kind": "browser-scenario-observation",
+      "capture": {
+        "browser": {
+          "mode": "launch",
+          "process_ownership": "provider-owned",
+          "cleanup": "terminated-owned-process",
+          "product": "Chromium",
+          "version": "153.0.8010.12"
+        },
+        "scenario": {
+          "start_origin": "https://vrew.ai",
+          "action_count": 1,
+          "secret_references": [],
+          "network_content": {
+            "request_body": false,
+            "response_body": false,
+            "header_values": false
+          },
+          "event_families": [
+            "page-errors"
+          ],
+          "limits": {
+            "max_events": 10000,
+            "max_event_allocation_bytes": 4194304,
+            "max_total_event_allocation_bytes": 16777216,
+            "max_network_transactions": 1024,
+            "max_network_body_bytes": 65536,
+            "max_network_body_allocation_bytes": 1048576,
+            "max_network_header_allocation_bytes": 1048576,
+            "max_network_metadata_allocation_bytes": 1048576
+          }
+        },
+        "duration_ms": 1985,
+        "steps": [],
+        "events": {
+          "retained": 0,
+          "dropped": 0,
+          "items": [],
+          "omissions": {
+            "by_kind": [],
+            "network_transactions": [],
+            "network_transaction_range": null
+          }
+        },
+        "limitations": [
+          "Event sequence records provider receipt order; simultaneous browser causality is not inferred.",
+          "Network content is retained only when selected; Playwright response-body bytes are API results and are not guaranteed to match wire bytes.",
+          "Request bytes are limited to what Playwright exposes; not_exposed does not establish body absence or multipart file coverage.",
+          "Network content reads settle within 5 seconds each and the observer does not request bodies from unfinished responses.",
+          "Playwright scenario events do not expose request initiator stacks; receipt order does not prove causality.",
+          "Storage values are hashed only after declared-secret redaction.",
+          "Scenario navigation failed before the initial state was captured."
+        ]
+      }
+    }
+  },
+  "great100_design_choices": {
+    "authority": "local implementation design, not recovered Vrew implementation",
+    "decisions": [
+      "Field-level inverse edits preserve asynchronous media and cloud metadata",
+      "Recent 50 edit groups are retained for the open project session",
+      "Text fields keep native undo keyboard handling; toolbar and outside-field shortcuts apply project history",
+      "System generation/upload completion does not enter user edit history",
+      "Large reference images are prepared as request copies without replacing originals"
+    ]
+  },
+  "limitations": [
+    "Vrew runtime actions and behavior were not verified because navigation failed.",
+    "The retained REA graph is partial; dynamic relationships and full returned callable behavior remain unknown.",
+    "Actual paid generation and a packaged Tauri runtime were not exercised."
+  ]
+}

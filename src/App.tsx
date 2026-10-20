@@ -14,19 +14,20 @@ import {
   LoaderCircle,
   Mic,
   Music2,
-  KeyRound,
   Plus,
   RefreshCw,
   Save,
   Sparkles,
   Trash2,
   Upload,
+  Undo2,
+  Redo2,
   WandSparkles,
 } from "lucide-react";
 import { createProjectDraft, DEFAULT_STYLE, parseWorkText } from "./parser";
 import { completionErrors, createV2ProjectDraft, parseAppData, reportForProject } from "./app-data";
 import { composeScenePrompt, composeThumbnailPrompt } from "./prompts";
-import { createNumberedProject, getNextProjectEpisode, deleteCandidateAsset, deleteProject, downloadBlob, exportProjectZip, generateImages, getAccessCode, getBackgroundMusic, getRenderedVideo, importImageCandidates, importSceneVideo, isTauri, listProjects, removeBackgroundMusic, removeSceneNarration, saveBackgroundMusic, saveProject, saveRenderedVideo, setAccessCode } from "./platform";
+import { createNumberedProject, getNextProjectEpisode, deleteCandidateAsset, deleteProject, downloadBlob, exportProjectZip, generateImages, getAccessCode, getBackgroundMusic, getRenderedVideo, importImageCandidates, importSceneVideo, isTauri, listProjects, removeBackgroundMusic, removeSceneNarration, resolveReferenceImage, saveBackgroundMusic, saveProject, saveRenderedVideo } from "./platform";
 import { findCandidate, withoutAssetCandidate, withoutSceneCandidate } from "./candidates";
 import { buildVideoPlan, renderProjectMp4, resolveVideoIntroImage, sceneMusicVolume } from "./video";
 import { SceneNarrationPanel } from "./SceneNarrationPanel";
@@ -36,6 +37,8 @@ import { ScenePreviewPane } from "./SceneTimeline";
 import { SAMPLE_WORK_TEXT } from "./sample";
 import { PersonPicker } from "./PersonPicker";
 import { useStepHistory } from "./useStepHistory";
+import { useEditorHistory } from "./useEditorHistory";
+import type { EditOptions } from "./editor-history";
 import { AccountMenu, AuthGate } from "./Auth";
 import { checkCloudStorage, cloudContext } from "./cloud";
 import { mergeProjectChanges } from "./project-changes";
@@ -62,7 +65,7 @@ function Studio() {
   const [busy, setBusy] = useState(false);
   const [deletingId, setDeletingId] = useState("");
   const [projects, setProjects] = useState<ProjectData[]>([]);
-  const [accessCode, updateAccessCode] = useState(getAccessCode);
+  const [accessCode] = useState(getAccessCode);
   const cloud = !!cloudContext();
   const [storageReady, setStorageReady] = useState(!cloud);
   const [storageLoading, setStorageLoading] = useState(cloud);
@@ -74,7 +77,8 @@ function Studio() {
   const latestProjects = useRef(new Map<string, ProjectData>());
   const pendingSaves = useRef(0);
   const loadVersion = useRef(0);
-  const selectProject = (value: ProjectData | null) => { projectRef.current = value; setProject(value); };
+  const { history, refresh: refreshHistory } = useEditorHistory();
+  const selectProject = (value: ProjectData | null) => { history.reset(value?.id || null); projectRef.current = value; setProject(value); };
   const storageStatus = saveError ? "저장 실패 · 확인 필요" : saveCount ? "변경사항 저장 중…"
     : cloud ? storageReady ? "계정에 저장됨" : "계정 저장 연결 확인 필요" : "이 브라우저에 저장됨";
 
@@ -95,6 +99,7 @@ function Studio() {
       if (discardChanges) {
         saveFailures.current.clear(); setSaveError(""); setNotice("");
         const selected = items.find(item => item.id === projectRef.current?.id);
+        history.reset(selected?.id || null, true); refreshHistory();
         selectProject(selected || null);
         if (!selected) setStep(0);
       }
@@ -164,15 +169,21 @@ function Studio() {
     }
   };
 
-  const persist = async (next: ProjectData) => {
+  const persist = async (next: ProjectData, options: EditOptions = {}) => {
     const current = latestProjects.current.get(next.id) || next;
-    const merged = mergeProjectChanges(project, next, current);
-    const updated = { ...merged, updated_at: new Date().toISOString(), app_state: merged.schema_version !== 1 ? {
+    const merged = mergeProjectChanges(options.base || project, next, current);
+    const previousTime = Date.parse(current.updated_at);
+    const updated = { ...merged, updated_at: new Date(Math.max(Date.now(), Number.isFinite(previousTime) ? previousTime + 1 : 0)).toISOString(), app_state: merged.schema_version !== 1 ? {
       selected_character_image: merged.anchor.selected_candidate_id,
       selected_scene_images: Object.fromEntries(merged.scenes.filter((scene) => scene.selected_candidate_id).map((scene) => [scene.source_scene_id || scene.id, scene.selected_candidate_id!])),
       selected_thumbnail: merged.thumbnail.selected_candidate_id,
       warnings: reportForProject(merged).warnings,
     } : merged.app_state };
+    if (projectRef.current?.id === updated.id) {
+      if (options.history === false) history.reconcile(updated);
+      else history.record(current, updated);
+      refreshHistory();
+    }
     latestProjects.current.set(updated.id, updated);
     if (projectRef.current?.id === updated.id) selectProject(updated);
     setProjects((items) => items.map((item) => item.id === updated.id ? updated : item));
@@ -211,10 +222,34 @@ function Studio() {
     finally { setDeletingId(""); }
   };
 
-  const updateScene = async (scene: Scene) => {
+  const updateScene = async (scene: Scene, options?: EditOptions) => {
     if (!project) return;
-    await persist({ ...project, scenes: project.scenes.map((item) => (item.id === scene.id ? scene : item)) });
+    await persist({ ...project, scenes: project.scenes.map((item) => (item.id === scene.id ? scene : item)) }, options);
   };
+
+  const travelHistory = (direction: "undo" | "redo") => {
+    const selected = projectRef.current;
+    if (!selected) return;
+    const current = latestProjects.current.get(selected.id) || selected;
+    const result = history[direction](current);
+    refreshHistory();
+    if (result.status === "conflict") { setNotice("다른 변경이 반영되어 편집 이력을 초기화했습니다."); return; }
+    if (result.status === "applied") void persist(result.project, { history: false, base: current });
+  };
+
+  useEffect(() => {
+    const keydown = (event: KeyboardEvent) => {
+      if (step <= 1 || !projectRef.current || event.defaultPrevented || event.isComposing || event.altKey || !(event.ctrlKey || event.metaKey)) return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])")) return;
+      const key = event.key.toLowerCase();
+      if (key !== "z" && key !== "y") return;
+      event.preventDefault();
+      travelHistory(key === "y" || event.shiftKey ? "redo" : "undo");
+    };
+    window.addEventListener("keydown", keydown);
+    return () => window.removeEventListener("keydown", keydown);
+  });
 
   const reparseSource = async () => {
     if (!project) return;
@@ -250,9 +285,13 @@ function Studio() {
         </div>
       </aside>
 
-      <main>
+      <main onFocusCapture={() => history.breakGroup()} onBlurCapture={() => history.breakGroup()} onPointerDownCapture={() => history.breakGroup()} onPointerUpCapture={() => history.breakGroup()}>
         <header className="topbar">
           <div className="breadcrumb">한국을 빛낸 100인 <b>/</b> {project?.person || "새 프로젝트"}</div>
+          {project && step > 1 && <div className="editor-history" role="group" aria-label="편집 이력">
+            <button className="btn ghost" aria-label="실행 취소" title={history.undoLabel ? `${history.undoLabel} 되돌리기 · Ctrl/⌘ Z` : "되돌릴 편집이 없습니다"} disabled={!history.undoLabel} onClick={() => travelHistory("undo")}><Undo2 size={16} /><span>실행 취소</span></button>
+            <button className="btn ghost" aria-label="다시 실행" title={history.redoLabel ? `${history.redoLabel} 다시 적용 · Ctrl/⌘ Shift Z` : "다시 적용할 편집이 없습니다"} disabled={!history.redoLabel} onClick={() => travelHistory("redo")}><Redo2 size={16} /><span>다시 실행</span></button>
+          </div>}
           <div className="topbar-actions"><div className="progress-wrap"><span>{progress}%</span><div><i style={{ width: `${progress}%` }} /></div></div><AccountMenu storageStatus={storageStatus} saving={saveCount > 0 || !!saveError || importing || !!deletingId || busy} /></div>
         </header>
 
@@ -261,7 +300,7 @@ function Studio() {
           {saveError && <div className="panel cloud-setup-panel" role="alert"><strong>계정에 저장하지 못한 변경사항이 있습니다.</strong><p>{saveError}</p><div className="dashboard-actions"><button className="btn ghost" disabled={saveCount > 0} onClick={() => { for (const id of saveFailures.current.keys()) { const item = latestProjects.current.get(id); if (item) void persist(item); } }}>저장 다시 시도</button><button className="btn ghost" onClick={() => { for (const id of saveFailures.current.keys()) { const item = latestProjects.current.get(id); if (item) void download(item); } }}>편집본 ZIP 보관</button><button className="btn ghost" disabled={saveCount > 0} onClick={() => { if (window.confirm("저장하지 못한 현재 편집 내용을 버리고 계정의 최신 작업을 불러올까요?\n\n현재 편집본이 필요하면 먼저 ZIP으로 보관해 주세요.")) void reloadProjects(true); }}>최신 작업 불러오기</button></div></div>}
           {step === 0 && cloud && !storageReady && <div className="panel cloud-setup-panel" role="status"><strong>{storageLoading ? "계정 저장소에 연결하고 있어요." : "계정 저장 연결을 준비하고 있어요."}</strong><p>연결이 완료되면 계정의 프로젝트와 파일을 불러올 수 있습니다. 기존 브라우저 작업은 그대로 보관돼 있습니다.</p><button className="btn ghost" disabled={storageLoading} onClick={() => void reloadProjects()}>연결 다시 확인</button></div>}
           {step === 0 && cloud && storageReady && <LocalProjectImport onImported={reloadProjects} onBusyChange={setImporting} />}
-          {step === 0 && <Dashboard onStart={() => { selectProject(null); setStep(1); }} projects={projects} accessCode={accessCode} onAccessCode={(code) => { updateAccessCode(code); setAccessCode(code); }} onOpen={(item) => { selectProject(latestProjects.current.get(item.id) || item); setStep(2); }} onDownload={download} onDelete={removeProject} deletingId={deletingId} ready={storageReady && !importing && !deletingId} onReload={reloadProjects} refreshing={storageLoading || saveCount > 0 || importing || !!deletingId} />}
+          {step === 0 && <Dashboard onStart={() => { selectProject(null); setStep(1); }} projects={projects} onOpen={(item) => { selectProject(latestProjects.current.get(item.id) || item); setStep(2); }} onDownload={download} onDelete={removeProject} deletingId={deletingId} ready={storageReady && !importing && !deletingId} onReload={reloadProjects} refreshing={storageLoading || saveCount > 0 || importing || !!deletingId} />}
           {step === 1 && (
             <ProjectSetup episode={episode} person={person} category={category} source={source} busy={busy} legacyImport={legacyImport} setLegacyImport={setLegacyImport} errors={setupErrors}
               setPerson={setPerson} setCategory={setCategory} setSource={setSource}
@@ -269,9 +308,9 @@ function Studio() {
           )}
           {step === 2 && project && <ParseReview project={project} onChange={persist} onReparse={reparseSource} onError={setNotice} />}
           {step === 3 && project && <Preflight project={project} />}
-          {step === 4 && project && <AssetStudio title="인물 기준 이미지" eyebrow="CHARACTER ANCHOR" description="얼굴 일관성을 위한 기준 이미지입니다. 업로드한 이미지가 있으면 생성 단계를 건너뛰어도 됩니다." asset={project.anchor} project={project} kind="anchor" onChange={(anchor) => persist({ ...project, anchor })} />}
+          {step === 4 && project && <AssetStudio title="인물 기준 이미지" eyebrow="CHARACTER ANCHOR" description="얼굴 일관성을 위한 기준 이미지입니다. 업로드한 이미지가 있으면 생성 단계를 건너뛰어도 됩니다." asset={project.anchor} project={project} kind="anchor" onChange={(anchor, options) => persist({ ...project, anchor }, options)} />}
           {step === 5 && project && <SceneStudio project={project} onChange={updateScene} onProjectChange={persist} />}
-          {step === 6 && project && <AssetStudio title="썸네일 만들기" eyebrow="THUMBNAIL" description="대표 이미지를 선택하세요. 선택한 썸네일은 영상 마지막 인물 이름 화면의 배경에도 사용됩니다." asset={project.thumbnail} project={project} kind="thumbnail" onChange={(thumbnail) => persist({ ...project, thumbnail })} />}
+          {step === 6 && project && <AssetStudio title="썸네일 만들기" eyebrow="THUMBNAIL" description="대표 이미지를 선택하세요. 선택한 썸네일은 영상 마지막 인물 이름 화면의 배경에도 사용됩니다." asset={project.thumbnail} project={project} kind="thumbnail" onChange={(thumbnail, options) => persist({ ...project, thumbnail }, options)} />}
           {step === 7 && project && <ImageReview project={project} />}
           {step === 8 && project && <Complete project={project} onDownload={() => download(project)} />}
         </section>
@@ -288,7 +327,7 @@ function Studio() {
   );
 }
 
-function Dashboard({ onStart, projects, accessCode, onAccessCode, onOpen, onDownload, onDelete, deletingId, ready, onReload, refreshing }: { onStart: () => void; projects: ProjectData[]; accessCode: string; onAccessCode: (code: string) => void; onOpen: (project: ProjectData) => void; onDownload: (project: ProjectData) => void; onDelete: (project: ProjectData) => void; deletingId: string; ready: boolean; onReload: () => Promise<void>; refreshing: boolean }) {
+function Dashboard({ onStart, projects, onOpen, onDownload, onDelete, deletingId, ready, onReload, refreshing }: { onStart: () => void; projects: ProjectData[]; onOpen: (project: ProjectData) => void; onDownload: (project: ProjectData) => void; onDelete: (project: ProjectData) => void; deletingId: string; ready: boolean; onReload: () => Promise<void>; refreshing: boolean }) {
   return <div className="dashboard-page"><div className="hero-page">
     <div className="hero-copy">
       <div className="eyebrow">GREAT STORIES, BEAUTIFULLY MADE</div>
@@ -312,7 +351,6 @@ function Dashboard({ onStart, projects, accessCode, onAccessCode, onOpen, onDown
     </div>
   </div>
   <div className="dashboard-details"><VisitorTrends /><div className="dashboard-primary">
-  {!isTauri() && <div className="access-panel"><KeyRound size={18} /><div><strong>실제 이미지 생성 접근 코드</strong><small>배포 관리자에게 받은 코드를 입력하면 OpenAI 이미지 생성이 활성화됩니다. 비워두면 mock mode로 작동합니다.</small></div><input type="password" aria-label="이미지 생성 접근 코드" placeholder="접근 코드 입력" value={accessCode} onChange={(event) => onAccessCode(event.target.value)} /></div>}
   {projects.length > 0 && <div className="recent-projects"><div className="recent-head"><h3>최근 프로젝트</h3><span>{projects.length}개</span></div><div className="recent-grid">{projects.map((item) => <div className="recent-card" key={item.id}><span>EP. {String(item.episode).padStart(3, "0")}</span><strong>{item.person}</strong><small>{item.scenes.length}개 장면 · {new Date(item.updated_at).toLocaleDateString("ko-KR")}</small><div><button className="btn ghost" onClick={() => onOpen(item)}>이어 작업하기</button>{!isTauri() && <button className="btn ghost" onClick={() => onDownload(item)}><Download size={14} /> ZIP</button>}<button className="btn ghost delete-project" disabled={deletingId === item.id} onClick={() => onDelete(item)}>{deletingId === item.id ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />} 삭제</button></div></div>)}</div></div>}
   </div></div>
   </div>;
@@ -424,7 +462,7 @@ function PageHeading({ eyebrow, title, text }: { eyebrow: string; title: string;
   return <div className="page-heading"><div className="eyebrow">{eyebrow}</div><h2>{title}</h2><p>{text}</p></div>;
 }
 
-function AssetStudio({ title, eyebrow, description, asset, project, kind, onChange }: { title: string; eyebrow: string; description: string; asset: VisualAsset; project: ProjectData; kind: "anchor" | "thumbnail"; onChange: (asset: VisualAsset) => void }) {
+function AssetStudio({ title, eyebrow, description, asset, project, kind, onChange }: { title: string; eyebrow: string; description: string; asset: VisualAsset; project: ProjectData; kind: "anchor" | "thumbnail"; onChange: (asset: VisualAsset, options?: EditOptions) => void }) {
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -432,13 +470,13 @@ function AssetStudio({ title, eyebrow, description, asset, project, kind, onChan
   const generate = async () => {
     setError("");
     if (!asset.prompt.trim()) return setError("이미지 내용을 먼저 입력해 주세요.");
-    onChange({ ...asset, status: "generating" });
+    onChange({ ...asset, status: "generating" }, { history: false });
     try {
       const prompt = kind === "thumbnail" ? fullPrompt : `${asset.prompt}\n\n공통 스타일: ${project.style_guide}`;
-      const anchor = project.anchor.candidates.find((candidate) => candidate.id === project.anchor.selected_candidate_id);
-      const candidates = await generateImages({ project_path: project.project_path, asset_kind: kind, prompt, count: 3, reference_image: kind === "thumbnail" && anchor?.mode === "openai" ? anchor.preview_url : undefined });
-      onChange({ ...asset, candidates: [...asset.candidates, ...candidates], status: "ready", prompt_history: appendHistory(asset.prompt_history, prompt) });
-    } catch (cause) { setError(String(cause)); onChange({ ...asset, status: "error" }); }
+      const reference_image = kind === "thumbnail" ? await resolveReferenceImage(project) : undefined;
+      const candidates = await generateImages({ project_path: project.project_path, asset_kind: kind, prompt, count: 3, reference_image });
+      onChange({ ...asset, candidates: [...asset.candidates, ...candidates], status: "ready", prompt_history: appendHistory(asset.prompt_history, prompt) }, { history: false });
+    } catch (cause) { setError(String(cause)); onChange({ ...asset, status: "error" }, { history: false }); }
   };
   const copyFullPrompt = async () => {
     try { await navigator.clipboard.writeText(fullPrompt); setCopied(true); setError(""); }
@@ -449,13 +487,13 @@ function AssetStudio({ title, eyebrow, description, asset, project, kind, onChan
     setUploading(true);
     try {
       const candidates = await importImageCandidates(files, { project_path: project.project_path, asset_kind: kind });
-      onChange({ ...asset, candidates: [...asset.candidates, ...candidates], selected_candidate_id: candidates.at(-1)?.id || asset.selected_candidate_id, status: "ready", prompt_history: appendHistory(asset.prompt_history, asset.prompt) });
+      onChange({ ...asset, candidates: [...asset.candidates, ...candidates], selected_candidate_id: candidates.at(-1)?.id || asset.selected_candidate_id, status: "ready", prompt_history: appendHistory(asset.prompt_history, asset.prompt) }, { history: false });
     } catch (cause) { setError(String(cause)); }
     finally { setUploading(false); }
   };
   const removeCandidate = async (id: string) => {
     await deleteCandidateAsset(project, kind, findCandidate(asset.candidates, id));
-    onChange(withoutAssetCandidate(asset, id));
+    onChange(withoutAssetCandidate(asset, id), { history: false });
   };
   return <div className="page">
     <PageHeading eyebrow={eyebrow} title={title} text={description} />
@@ -506,7 +544,7 @@ function BackgroundMusicPanel({ project, onChange }: { project: ProjectData; onC
   return <div className="panel background-music-panel"><div className="music-head"><Music2 size={20} /><div><strong>영상 배경음악</strong><small>음악 한 곡이 영상 전체에 반복됩니다. 장면마다 아래에서 볼륨을 조절하세요.</small></div><input ref={input} className="file-input" type="file" accept=".mp3,.wav,.m4a,.mp4,audio/mpeg,audio/wav,audio/mp4,video/mp4" aria-label="배경음악 파일 선택" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void upload(file); }} /><button className="btn ghost" disabled={busy} onClick={() => input.current?.click()}>{busy ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />}{project.background_music ? "음악 교체" : "음악 업로드"}</button></div>{project.background_music && <div className="music-file"><span>{project.background_music.name}</span>{previewUrl && <audio controls preload="metadata" src={previewUrl} aria-label="배경음악 미리듣기" />}<button className="btn ghost" disabled={busy} onClick={remove}><Trash2 size={15} /> 제거</button></div>}<small className="music-hint">MP3·WAV·M4A·MP4(MPEG-4), 100MB·15분 이하 · 사용 권한이 있는 음악을 선택해 주세요.</small>{error && <div className="error-banner">{error}</div>}</div>;
 }
 
-function SceneStudio({ project, onChange, onProjectChange }: { project: ProjectData; onChange: (scene: Scene) => void; onProjectChange: (project: ProjectData) => Promise<void> }) {
+function SceneStudio({ project, onChange, onProjectChange }: { project: ProjectData; onChange: (scene: Scene, options?: EditOptions) => void; onProjectChange: (project: ProjectData) => Promise<void> }) {
   const [active, setActive] = useState(project.scenes[0]?.id || "");
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
@@ -520,12 +558,12 @@ function SceneStudio({ project, onChange, onProjectChange }: { project: ProjectD
   const generate = async () => {
     setError("");
     if (!scene.prompt.trim()) return setError("장면 내용을 먼저 입력해 주세요.");
-    onChange({ ...scene, status: "generating" });
+    onChange({ ...scene, status: "generating" }, { history: false });
     try {
-      const anchor = project.anchor.candidates.find((candidate) => candidate.id === project.anchor.selected_candidate_id);
-      const candidates = await generateImages({ project_path: project.project_path, asset_kind: "scene", scene_number: scene.number, prompt: fullPrompt, count: project.schema_version !== 1 ? 2 : 3, reference_image: anchor?.mode === "openai" ? anchor.preview_url : undefined });
-      onChange({ ...scene, candidates: [...scene.candidates, ...candidates], status: "ready", prompt_history: appendHistory(scene.prompt_history, fullPrompt) });
-    } catch (cause) { setError(String(cause)); onChange({ ...scene, status: "error" }); }
+      const reference_image = await resolveReferenceImage(project);
+      const candidates = await generateImages({ project_path: project.project_path, asset_kind: "scene", scene_number: scene.number, prompt: fullPrompt, count: project.schema_version !== 1 ? 2 : 3, reference_image });
+      onChange({ ...scene, candidates: [...scene.candidates, ...candidates], status: "ready", prompt_history: appendHistory(scene.prompt_history, fullPrompt) }, { history: false });
+    } catch (cause) { setError(String(cause)); onChange({ ...scene, status: "error" }, { history: false }); }
   };
   const copyFullPrompt = async () => {
     try { await navigator.clipboard.writeText(fullPrompt); setCopied(true); setError(""); }
@@ -538,7 +576,7 @@ function SceneStudio({ project, onChange, onProjectChange }: { project: ProjectD
       const candidates = await importImageCandidates(files, { project_path: project.project_path, asset_kind: "scene", scene_number: scene.number });
       const selectedIsVideo = scene.candidates.some((candidate) => candidate.id === scene.selected_candidate_id && candidate.media_type === "video");
       onChange({ ...scene, candidates: [...scene.candidates, ...candidates], selected_candidate_id: selectedIsVideo ? scene.selected_candidate_id : candidates.at(-1)?.id || scene.selected_candidate_id,
-        status: "ready", prompt_history: appendHistory(scene.prompt_history, scene.prompt) });
+        status: "ready", prompt_history: appendHistory(scene.prompt_history, scene.prompt) }, { history: false });
     } catch (cause) { setError(String(cause)); }
     finally { setUploading(false); }
   };
@@ -546,7 +584,7 @@ function SceneStudio({ project, onChange, onProjectChange }: { project: ProjectD
     setVideoBusy(true); setError("");
     try {
       const candidate = await importSceneVideo(project, scene, file);
-      onChange({ ...scene, candidates: [...scene.candidates, candidate], selected_candidate_id: candidate.id, status: "ready" });
+      onChange({ ...scene, candidates: [...scene.candidates, candidate], selected_candidate_id: candidate.id, status: "ready" }, { history: false });
     } catch (cause) { setError(String(cause)); }
     finally { setVideoBusy(false); }
   };
@@ -555,7 +593,7 @@ function SceneStudio({ project, onChange, onProjectChange }: { project: ProjectD
     setSupportBusy(true); setError("");
     try {
       const candidates = await generateImages({ project_path: project.project_path, asset_kind: "support", scene_number: scene.number, prompt: `${scene.support_image_prompt}\n\n${project.style_guide}\nno text, no letters, no captions, no watermark. 16:9.`, count: 2 });
-      onChange({ ...scene, support_candidates: [...(scene.support_candidates || []), ...candidates], support_selected_candidate_id: scene.support_selected_candidate_id || candidates[0]?.id, support_prompt_history: appendHistory(scene.support_prompt_history || [], scene.support_image_prompt) });
+      onChange({ ...scene, support_candidates: [...(scene.support_candidates || []), ...candidates], support_selected_candidate_id: scene.support_selected_candidate_id || candidates[0]?.id, support_prompt_history: appendHistory(scene.support_prompt_history || [], scene.support_image_prompt) }, { history: false });
     } catch (cause) { setError(String(cause)); }
     finally { setSupportBusy(false); }
   };
@@ -563,14 +601,14 @@ function SceneStudio({ project, onChange, onProjectChange }: { project: ProjectD
     setSupportBusy(true); setError("");
     try {
       const candidates = await importImageCandidates(files, { project_path: project.project_path, asset_kind: "support", scene_number: scene.number });
-      onChange({ ...scene, support_candidates: [...(scene.support_candidates || []), ...candidates], support_selected_candidate_id: candidates.at(-1)?.id || scene.support_selected_candidate_id });
+      onChange({ ...scene, support_candidates: [...(scene.support_candidates || []), ...candidates], support_selected_candidate_id: candidates.at(-1)?.id || scene.support_selected_candidate_id }, { history: false });
     } catch (cause) { setError(String(cause)); }
     finally { setSupportBusy(false); }
   };
   const removeCandidate = async (id: string, support = false) => {
     const candidate = findCandidate(support ? scene.support_candidates || [] : scene.candidates, id);
     await deleteCandidateAsset(project, support ? "support" : "scene", candidate, scene.number);
-    onChange(withoutSceneCandidate(scene, id, support));
+    onChange(withoutSceneCandidate(scene, id, support), { history: false });
   };
   const position = project.scenes.findIndex((item) => item.id === scene.id);
   const selectedVideo = scene.candidates.find((candidate) => candidate.id === scene.selected_candidate_id)?.media_type === "video";
