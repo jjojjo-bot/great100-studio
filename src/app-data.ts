@@ -93,7 +93,9 @@ function validateData(value: unknown, edited = false, coreIds?: string[]): Quali
           }
           if (nonempty(caption.text) && estimatedCaptionLines(caption.text) > 2) warnings.push(`Scene ${String(index + 1).padStart(2, "0")} Caption ${captionIndex + 1}가 3줄 이상으로 표시될 수 있습니다.`);
         });
-        if (nonempty(scene.narration) && scene.captions.every((raw) => nonempty(record(raw).text))) {
+        // Import checks that the supplied captions cover the supplied narration.
+        // Edited captions are the current script; the old narration is not an output constraint.
+        if (!edited && nonempty(scene.narration) && scene.captions.every((raw) => nonempty(record(raw).text))) {
           const narration = normalizeCaptionText(scene.narration);
           const captionText = normalizeCaptionText(scene.captions.map((raw) => record(raw).text).join(""));
           if (narration && captionText && textSimilarity(narration, captionText) < 0.8) errors.push(`${expected}의 captions가 narration 내용을 충분히 포함하지 않습니다.`);

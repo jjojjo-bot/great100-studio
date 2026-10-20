@@ -2,11 +2,71 @@ import { expect, it } from "vitest";
 import { editorProject } from "../tests/fixtures/editor-project";
 import { createProjectDraft } from "./parser";
 import { SAMPLE_WORK_TEXT } from "./sample";
-import { reportForProject, validateAppData } from "./app-data";
-import { assertEditorWrite, readEditorProject } from "./editor-format";
+import { completionErrors, reportForProject, validateAppData } from "./app-data";
+import { assertEditorWrite, prepareEditorWrite, readEditorProject } from "./editor-format";
 import { EditorHistory } from "./editor-history";
 import { buildVideoPlan } from "./video";
 import { mergeProjectChanges } from "./project-changes";
+import { narrationScript } from "./narration-generation";
+import { sceneNarrationBundle } from "./scene-narration-export";
+import { mergeProject } from "../tests/fixtures/merge-project";
+import { mergeScene } from "./scene-merge";
+import { splitScene } from "./scene-split";
+
+function readyProject() {
+  const project = editorProject();
+  project.scenes.forEach((scene, index) => {
+    scene.candidates = [{ id: `image-${index}`, path: `image-${index}.png`, preview_url: "data:image/png;base64,a", created_at: "now", mode: "uploaded" }];
+    scene.selected_candidate_id = `image-${index}`;
+  });
+  project.thumbnail.candidates = [project.scenes[0].candidates[0]];
+  project.thumbnail.selected_candidate_id = project.thumbnail.candidates[0].id;
+  return prepareEditorWrite(project);
+}
+
+it.each([false, true])("allows a fully rewritten caption to reach preview and export while preserving source and recording=%s", recorded => {
+  const original = readyProject();
+  if (recorded) original.scenes[0].narration_audio = { id: "old", name: "old.wav", path: "old.wav", mime_type: "audio/wav", duration_sec: 2 };
+  const project = prepareEditorWrite(original), before = structuredClone(project), script = "훈민정음은 누구나 자신의 생각을 전할 수 있도록 만든 글자입니다.";
+  project.scenes[0].captions![0].text = script;
+  expect(reportForProject(project).errors).toEqual([]); expect(completionErrors(project)).toEqual([]);
+  expect(buildVideoPlan(project)[1].timedCaptions![0].text).toBe(script); expect(narrationScript(project.scenes[0])).toBe(script);
+  expect(sceneNarrationBundle(project, [project.scenes[0].id]).text).toContain(`낭독할 대본:\n${script}`);
+  expect(project.scenes[0].narration).toBe(before.scenes[0].narration); expect(project.scenes[0].narration_audio).toEqual(before.scenes[0].narration_audio);
+  expect(project.media).toEqual(before.media); expect(project.source).toEqual(before.source); expect(project.source_text).toBe(before.source_text); expect(() => assertEditorWrite(project, before)).not.toThrow();
+  const mismatchedImport = structuredClone(project.source!); mismatchedImport.scenes[0].captions![0].text = script;
+  expect(validateAppData(mismatchedImport).errors).toContain("scene_01의 captions가 narration 내용을 충분히 포함하지 않습니다.");
+  expect(validateAppData(project.source).errors).toEqual([]);
+});
+
+it("still blocks empty captions and invalid times after a substantial script edit", () => {
+  const valid = readyProject(); valid.scenes[0].captions![0].text = "새로운 역사 이야기로 문장을 완전히 바꿨습니다.";
+  for (const [patch, expected] of [
+    [{ text: " " }, "text 값이 없습니다"],
+    [{ end_sec: 0 }, "시작·종료 시간이 잘못"],
+    [{ end_sec: 11 }, "Scene 범위를 벗어"],
+  ] as const) {
+    const invalid = structuredClone(valid); Object.assign(invalid.scenes[0].captions![0], patch);
+    expect(completionErrors(invalid).join("\n")).toContain(expected); expect(() => buildVideoPlan(invalid)).toThrow();
+  }
+  const overlapping = structuredClone(valid); overlapping.scenes[0].captions!.push({ id: "overlap", text: "뒤 문장", start_sec: 9, end_sec: 10 });
+  expect(completionErrors(overlapping).join("\n")).toContain("겹치거나 역전"); expect(() => buildVideoPlan(overlapping)).toThrow();
+});
+
+it("keeps rewritten merged captions valid through splitting, undo, redo and JSON reopen", () => {
+  const original = mergeScene(mergeProject(), "scene_01"), changed = structuredClone(original);
+  changed.scenes[0].captions![0].text = "백성들이 쉽게 쓸 수 있는 글자를 함께 연구했습니다.";
+  changed.scenes[0].captions![1].text = "우리말의 소리를 새로운 글자에 담았습니다.";
+  const beforeRead = structuredClone(changed); expect(reportForProject(changed).errors).toEqual([]); expect(() => buildVideoPlan(changed)).not.toThrow(); expect(changed).toEqual(beforeRead);
+  const split = splitScene(changed, changed.scenes[0].id, changed.scenes[0].captions![1].id!, "rewritten-child");
+  expect(reportForProject(split).errors).toEqual([]); expect(split.scenes[0].composition!.narrations).toHaveLength(1); expect(split.scenes[1].composition!.narrations).toHaveLength(1);
+  const history = new EditorHistory(); history.record(original, changed);
+  const undo = history.undo(changed); if (undo.status !== "applied") throw new Error("undo failed"); expect(narrationScript(undo.project.scenes[0])).toBe(narrationScript(original.scenes[0]));
+  const redo = history.redo(undo.project); if (redo.status !== "applied") throw new Error("redo failed");
+  const reopened = readEditorProject(JSON.parse(JSON.stringify(redo.project))); expect(reportForProject(reopened).errors).toEqual([]); expect(() => buildVideoPlan(reopened)).not.toThrow();
+  expect(reopened.source).toEqual(original.source); expect(reopened.media).toEqual(original.media); expect(reopened.scenes[0].composition).toEqual(original.scenes[0].composition);
+  expect(narrationScript(reopened.scenes[0])).toBe(narrationScript(changed.scenes[0]));
+});
 
 it.each([1, "2.0", "2.1"] as const)("upgrades %s in memory without changing source, timing, media paths or unknown fields", version => {
   const original = version === 1 ? createProjectDraft(1, "이순신", "장군", SAMPLE_WORK_TEXT) : editorProject(version);

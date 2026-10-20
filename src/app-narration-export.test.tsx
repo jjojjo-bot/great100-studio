@@ -10,7 +10,7 @@ const mock = vi.hoisted(() => ({ list: vi.fn(), save: vi.fn(), copy: vi.fn(), do
 vi.mock("./Auth", () => ({ AuthGate: ({ children }: { children: ReactNode }) => children, AccountMenu: () => null }));
 vi.mock("./SceneTimeline", () => ({ ScenePreviewPane: () => null }));
 vi.mock("./FullVideoPreview", () => ({ FullVideoPreview: () => null }));
-vi.mock("./platform", async original => ({ ...await original<typeof import("./platform")>(), listProjects: mock.list, saveProject: mock.save, downloadBlob: mock.download, getMediaAsset: mock.read, getSceneNarration: async () => null, generateImages: mock.generate, savePreparedNarration: mock.upload, isTauri: () => false, getAccessCode: () => "" }));
+vi.mock("./platform", async original => ({ ...await original<typeof import("./platform")>(), listProjects: mock.list, saveProject: mock.save, downloadBlob: mock.download, getMediaAsset: mock.read, getSceneNarration: async () => null, getRenderedVideo: async () => null, generateImages: mock.generate, savePreparedNarration: mock.upload, isTauri: () => false, getAccessCode: () => "" }));
 let project: ProjectData;
 const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 beforeEach(() => {
@@ -40,6 +40,18 @@ it("copies and downloads exactly the displayed script bundle and keeps the filen
 it("exports edited captions with stable selection after a scene moves and returns from editing", async () => {
   await open(); fireEvent.click(screen.getByLabelText("Scene 3 대본 선택")); fireEvent.click(screen.getByRole("button", { name: "Scene 3 편집" })); fireEvent.change(screen.getByLabelText("Caption 1 텍스트"), { target: { value: "지금 편집한 낭독 문장" } }); fireEvent.click(screen.getByRole("button", { name: "이 장면을 앞으로 이동" }));
   await waitFor(() => expect(mock.save).toHaveBeenCalledTimes(2)); fireEvent.click(screen.getByRole("button", { name: "작업 보드로 돌아가기" })); expect((screen.getByLabelText("Scene 2 대본 선택") as HTMLInputElement).checked).toBe(true); expect(preview().value).toContain("지금 편집한 낭독 문장"); expect(preview().value).toContain("Scene 2 · 낭독 장면 3"); expect(preview().value).not.toContain("세종의 이야기 3");
+});
+it("allows a fully rewritten caption through the completion gate and keeps its recording, script copy and undo in sync", async () => {
+  project.thumbnail.candidates = [project.scenes[0].candidates[0]]; project.thumbnail.selected_candidate_id = project.thumbnail.candidates[0].id;
+  const script = "누구나 자신의 마음을 글로 전할 수 있도록 훈민정음을 만들었습니다.";
+  await open(); fireEvent.click(screen.getByRole("button", { name: "Scene 1 편집" })); fireEvent.change(screen.getByLabelText("Caption 1 텍스트"), { target: { value: script } });
+  fireEvent.click(screen.getByRole("button", { name: "내레이션 대본 복사" })); await waitFor(() => expect(mock.copy).toHaveBeenCalledWith(script));
+  fireEvent.click(screen.getByRole("button", { name: "작업 보드로 돌아가기" })); fireEvent.click(screen.getByLabelText("Scene 1 대본 선택")); expect(preview().value).toContain(script);
+  expect(screen.getByRole("button", { name: "다음 단계" }).hasAttribute("disabled")).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "실행 취소" })); await waitFor(() => expect(preview().value).toContain("세종의 이야기 1"));
+  fireEvent.click(screen.getByRole("button", { name: "다시 실행" })); await waitFor(() => expect(preview().value).toContain(script));
+  const saved: ProjectData = mock.save.mock.calls.at(-1)![0]; expect(saved.source).toEqual(project.source); expect(saved.source_text).toBe(project.source_text); expect(saved.scenes[0].narration_audio).toEqual(project.scenes[0].narration_audio);
+  fireEvent.click(screen.getByRole("button", { name: "다음 단계" })); expect(await screen.findByRole("heading", { name: "세종 편 영상 만들기" })).toBeTruthy(); expect(screen.getByRole("button", { name: "MP4 만들기" }).hasAttribute("disabled")).toBe(false); expect(mock.upload).not.toHaveBeenCalled(); expect(mock.generate).not.toHaveBeenCalled();
 });
 it("offers manual copy when clipboard access fails and recovers with TXT download", async () => {
   mock.copy.mockRejectedValue(new Error("clipboard denied")); await open(); fireEvent.click(button("전체 대본 선택")); fireEvent.click(button("대본 묶음 복사")); await waitFor(() => expect(within(panel()).getByRole("alert").textContent).toContain("직접 복사")); expect(document.activeElement).toBe(preview()); expect(preview().selectionEnd).toBe(preview().value.length);
