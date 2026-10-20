@@ -41,6 +41,10 @@ import { SceneImageBatch } from "./SceneImageBatch";
 import { useSceneImageBatch, type SceneImageBatchController } from "./useSceneImageBatch";
 import { attachBatchImage, type BatchImageRequest } from "./scene-image-batch";
 import { applyComparedImage, type ImageComparisonRequest, type ImageComparisonResult } from "./image-comparison";
+import { ImageComparison } from "./ImageComparison";
+import { ImageLibrary } from "./ImageLibrary";
+import { originalImage, originalCandidateId, restoreImageCandidate, type RestoreImageRequest, type RestoreImageResult } from "./image-library";
+import { readOriginalImageCandidate } from "./library-image-reader";
 import { createReviewView, type ReviewView } from "./scene-review";
 import { ScenePreviewPane } from "./SceneTimeline";
 import { SAMPLE_WORK_TEXT } from "./sample";
@@ -53,7 +57,7 @@ import { proposeNarrationTiming, timingFingerprint, type TimingRequest } from ".
 import { AccountMenu, AuthGate } from "./Auth";
 import { checkCloudStorage, cloudContext } from "./cloud";
 import { mergeProjectChanges } from "./project-changes";
-import { collectMediaAssets, prepareMediaProject, visualSelectionFingerprint } from "./media-composition";
+import { candidateAssetId, collectMediaAssets, prepareMediaProject, visualSelectionFingerprint } from "./media-composition";
 import { moveScene, orderedScenes } from "./scene-order";
 import { splitBoundaries, splitScene } from "./scene-split";
 import { mergeScene, sceneMergeTarget } from "./scene-merge";
@@ -108,6 +112,8 @@ function Studio() {
   const [saveCount, setSaveCount] = useState(0);
   const [saveError, setSaveError] = useState("");
   const [importing, setImporting] = useState(false);
+  const [restoringImage, setRestoringImage] = useState(false);
+  const restoreWorking = useRef(false);
   const saveFailures = useRef(new Map<string, string>());
   const projectRef = useRef(project);
   const latestProjects = useRef(new Map<string, ProjectData>());
@@ -123,7 +129,7 @@ function Studio() {
     : cloud ? storageReady ? "계정에 저장됨" : "계정 저장 연결 확인 필요" : "이 브라우저에 저장됨";
 
   const reloadProjects = async (discardChanges = false) => {
-    if (pendingSaves.current || (saveError && !discardChanges)) { setNotice("저장이 끝난 뒤 새로고침해 주세요. 저장 실패 시 현재 작업의 ZIP을 먼저 보관해 주세요."); return; }
+    if (pendingSaves.current || restoreWorking.current || (saveError && !discardChanges)) { setNotice("저장이 끝난 뒤 새로고침해 주세요. 저장 실패 시 현재 작업의 ZIP을 먼저 보관해 주세요."); return; }
     const version = ++loadVersion.current;
     setStorageLoading(true);
     try {
@@ -167,11 +173,11 @@ function Studio() {
   }, []);
 
   useEffect(() => {
-    if (!saveCount && !saveError) return;
+    if (!saveCount && !saveError && !restoringImage) return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [saveCount, saveError]);
+  }, [saveCount, saveError, restoringImage]);
 
   useEffect(() => {
     if (step === 1) {
@@ -259,7 +265,7 @@ function Studio() {
   };
 
   const removeProject = async (item: ProjectData) => {
-    if (batchImages.busy) { setNotice("이미지 연결이 끝나거나 중단된 후 프로젝트를 삭제해 주세요."); return; }
+    if (batchImages.busy || restoreWorking.current) { setNotice("이미지 연결이 끝나거나 중단된 후 프로젝트를 삭제해 주세요."); return; }
     const label = `EP. ${String(item.episode).padStart(3, "0")} · ${item.person} (${item.folder_name})`;
     const consequence = isTauri()
       ? "프로젝트 폴더는 projects/.trash로 이동하며 앱 목록에서 사라집니다."
@@ -363,6 +369,33 @@ function Studio() {
     return saveFailures.current.has(current.id) ? "unsaved" : "saved";
   };
 
+  const restoreOriginalImage = async (request: RestoreImageRequest): Promise<RestoreImageResult> => {
+    if (restoreWorking.current) throw new Error("다른 원본 이미지를 연결하고 있습니다. 완료 후 다시 시도해 주세요.");
+    restoreWorking.current = true; setRestoringImage(true); setNotice("");
+    try {
+      const before = latestProjects.current.get(request.projectId);
+      if (!before) throw new Error("이미지를 복원할 프로젝트가 없습니다.");
+      assertEditorReadable(before);
+      const asset = originalImage(before, request);
+      const scene = before.scenes.find(item => item.id === request.sceneId)!;
+      if (scene.candidates.some(candidate => candidate.id === originalCandidateId(asset))) return { sceneId: scene.id, message: `Scene ${scene.number}의 후보에 이미 있습니다. 현재 화면은 유지했습니다.` };
+      const candidate = await readOriginalImageCandidate(before, asset);
+      const current = latestProjects.current.get(request.projectId);
+      if (!current) throw new Error("이미지를 복원할 프로젝트가 없습니다.");
+      const latestAsset = originalImage(current, request);
+      if (latestAsset.inline_data !== asset.inline_data) throw new Error("원본 이미지 내용이 변경되었습니다. 보관함에서 다시 선택해 주세요.");
+      const restored = restoreImageCandidate(current, request, candidate);
+      if (restored !== current) {
+        const next = prepareEditorWrite(restored); assertEditorWrite(next, current);
+        await persist(next, { base: current, history: false });
+      }
+      const latest = latestProjects.current.get(request.projectId)?.scenes.find(item => item.id === request.sceneId);
+      if (!latest?.candidates.some(item => candidateAssetId(item) === asset.id)) return { sceneId: request.sceneId, message: "원본 연결 후 장면이 변경되었습니다. 최신 작업 보드에서 확인해 주세요." };
+      return { sceneId: latest.id, message: `Scene ${latest.number} 후보에 추가했습니다. 현재 화면은 유지했습니다.${saveFailures.current.has(current.id) ? " 프로젝트 저장은 상단에서 다시 시도해 주세요." : ""}` };
+    } catch (cause) { setNotice(`원본 후보 추가 실패: ${(cause as Error).message}`); throw cause; }
+    finally { restoreWorking.current = false; setRestoringImage(false); }
+  };
+
   const openReviewScene = (sceneId: string) => {
     if (!project) return;
     const current = latestProjects.current.get(project.id) || project;
@@ -436,16 +469,17 @@ function Studio() {
             <button className="btn ghost" aria-label="실행 취소" title={history.undoLabel ? `${history.undoLabel} 되돌리기 · Ctrl/⌘ Z` : "되돌릴 편집이 없습니다"} disabled={!history.undoLabel} onClick={() => travelHistory("undo")}><Undo2 size={16} /><span>실행 취소</span></button>
             <button className="btn ghost" aria-label="다시 실행" title={history.redoLabel ? `${history.redoLabel} 다시 적용 · Ctrl/⌘ Shift Z` : "다시 적용할 편집이 없습니다"} disabled={!history.redoLabel} onClick={() => travelHistory("redo")}><Redo2 size={16} /><span>다시 실행</span></button>
           </div>}
-          <div className="topbar-actions"><div className="progress-wrap"><span>{progress}%</span><div><i style={{ width: `${progress}%` }} /></div></div><AccountMenu storageStatus={storageStatus} saving={saveCount > 0 || !!saveError || importing || !!deletingId || busy || batchImages.busy} /></div>
+          <div className="topbar-actions"><div className="progress-wrap"><span>{progress}%</span><div><i style={{ width: `${progress}%` }} /></div></div><AccountMenu storageStatus={storageStatus} saving={saveCount > 0 || !!saveError || importing || !!deletingId || busy || batchImages.busy || restoringImage} /></div>
         </header>
 
         <section className={`workspace${step === 5 ? " scene-workspace-root" : ""}`}>
+          {restoringImage && step !== 7 && <div className="panel batch-toolbar" role="status"><LoaderCircle size={15} className="spin" /><span>원본 이미지를 장면 후보에 연결하고 있습니다. 전체 검토에서 결과를 확인할 수 있습니다.</span></div>}
           {batchImages.busy && step !== 7 && <div className="panel batch-toolbar" role="status"><LoaderCircle size={15} className="spin" /><span>이미지를 장면에 연결하고 있습니다. 전체 검토에서 진행 상태를 확인할 수 있습니다.</span><button type="button" className="btn ghost" onClick={batchImages.stop}>현재 파일 완료 후 중단</button></div>}
           {notice && <div className="toast" onClick={() => setNotice("")}>{notice}</div>}
           {saveError && <div className="panel cloud-setup-panel" role="alert"><strong>계정에 저장하지 못한 변경사항이 있습니다.</strong><p>{saveError}</p><div className="dashboard-actions"><button className="btn ghost" disabled={saveCount > 0} onClick={() => { for (const id of saveFailures.current.keys()) { const item = latestProjects.current.get(id); if (item) void persist(item); } }}>저장 다시 시도</button><button className="btn ghost" onClick={() => { for (const id of saveFailures.current.keys()) { const item = latestProjects.current.get(id); if (item) void download(item); } }}>편집본 ZIP 보관</button><button className="btn ghost" disabled={saveCount > 0} onClick={() => { if (window.confirm("저장하지 못한 현재 편집 내용을 버리고 계정의 최신 작업을 불러올까요?\n\n현재 편집본이 필요하면 먼저 ZIP으로 보관해 주세요.")) void reloadProjects(true); }}>최신 작업 불러오기</button></div></div>}
           {step === 0 && cloud && !storageReady && <div className="panel cloud-setup-panel" role="status"><strong>{storageLoading ? "계정 저장소에 연결하고 있어요." : "계정 저장 연결을 준비하고 있어요."}</strong><p>연결이 완료되면 계정의 프로젝트와 파일을 불러올 수 있습니다. 기존 브라우저 작업은 그대로 보관돼 있습니다.</p><button className="btn ghost" disabled={storageLoading} onClick={() => void reloadProjects()}>연결 다시 확인</button></div>}
           {step === 0 && cloud && storageReady && <LocalProjectImport onImported={reloadProjects} onBusyChange={setImporting} />}
-          {step === 0 && <Dashboard onStart={() => { selectProject(null); setStep(1); }} projects={projects} onOpen={(item) => { const selected = latestProjects.current.get(item.id) || item; try { assertEditorReadable(selected); } catch (error) { setNotice((error as Error).message); return; } selectProject(selected); setStep(2); }} onDownload={download} onDelete={removeProject} deletingId={deletingId} ready={storageReady && !importing && !deletingId && !batchImages.busy} onReload={reloadProjects} refreshing={storageLoading || saveCount > 0 || importing || !!deletingId || batchImages.busy} />}
+          {step === 0 && <Dashboard onStart={() => { selectProject(null); setStep(1); }} projects={projects} onOpen={(item) => { const selected = latestProjects.current.get(item.id) || item; try { assertEditorReadable(selected); } catch (error) { setNotice((error as Error).message); return; } selectProject(selected); setStep(2); }} onDownload={download} onDelete={removeProject} deletingId={deletingId} ready={storageReady && !importing && !deletingId && !batchImages.busy && !restoringImage} onReload={reloadProjects} refreshing={storageLoading || saveCount > 0 || importing || !!deletingId || batchImages.busy || restoringImage} />}
           {step === 1 && (
             <ProjectSetup episode={episode} person={person} category={category} source={source} busy={busy} legacyImport={legacyImport} setLegacyImport={setLegacyImport} errors={setupErrors}
               setPerson={setPerson} setCategory={setCategory} setSource={setSource}
@@ -456,7 +490,7 @@ function Studio() {
           {step === 4 && project && <AssetStudio title="인물 기준 이미지" eyebrow="CHARACTER ANCHOR" description="얼굴 일관성을 위한 기준 이미지입니다. 업로드한 이미지가 있으면 생성 단계를 건너뛰어도 됩니다." asset={project.anchor} project={project} kind="anchor" onChange={(anchor, options) => persist({ ...project, anchor }, options)} />}
           {step === 5 && project && <><div className="review-return-actions">{reviewView?.anchor && <button type="button" className="btn ghost" onClick={() => { reviewView.returning = true; setStep(7); }}><ArrowLeft size={15} /> 작업 보드로 돌아가기</button>}</div><SceneStudio key={project.id} project={project} activeSceneId={activeScenes[project.id]} onActiveSceneChange={id => setActiveScenes(previous => ({ ...previous, [project.id]: id }))} onChange={updateScene} onProjectChange={persist} onTimingChange={applyNarrationTiming} onGeneratedNarration={selectGeneratedNarration} onMove={changeSceneOrder} onSplit={divideScene} onMerge={combineScene} /></>}
           {step === 6 && project && <AssetStudio title="썸네일 만들기" eyebrow="THUMBNAIL" description="대표 이미지를 선택하세요. 선택한 썸네일은 영상 마지막 인물 이름 화면의 배경에도 사용됩니다." asset={project.thumbnail} project={project} kind="thumbnail" onChange={(thumbnail, options) => persist({ ...project, thumbnail }, options)} />}
-          {step === 7 && project && <ImageReview key={project.id} project={project} view={reviewView!} onOpenScene={openReviewScene} batch={batchImages} onCompareImage={confirmComparedImage} />}
+          {step === 7 && project && <ImageReview key={project.id} project={project} view={reviewView!} onOpenScene={openReviewScene} batch={batchImages} onCompareImage={confirmComparedImage} restoringImage={restoringImage} onRestoreImage={restoreOriginalImage} />}
           {step === 8 && project && <Complete project={project} onDownload={() => download(project)} />}
         </section>
 
@@ -583,11 +617,23 @@ function Preflight({ project }: { project: ProjectData }) {
   </div>;
 }
 
-function ImageReview({ project, view, onOpenScene, batch, onCompareImage }: { project: ProjectData; view: ReviewView; onOpenScene: (sceneId: string) => void; batch: SceneImageBatchController; onCompareImage: (request: ImageComparisonRequest) => Promise<ImageComparisonResult> }) {
+function ImageReview({ project, view, onOpenScene, batch, onCompareImage, restoringImage, onRestoreImage }: { project: ProjectData; view: ReviewView; onOpenScene: (sceneId: string) => void; batch: SceneImageBatchController; onCompareImage: (request: ImageComparisonRequest) => Promise<ImageComparisonResult>; restoringImage: boolean; onRestoreImage: (request: RestoreImageRequest) => Promise<RestoreImageResult> }) {
   const errors = completionErrors(project);
+  const [comparison, setComparison] = useState<{ sceneId: string; sceneIds: string[]; origin: HTMLElement | null; scrollY: number }>();
+  const closeComparison = () => {
+    const saved = comparison; setComparison(undefined);
+    if (saved) window.requestAnimationFrame(() => {
+      const target = saved.origin?.isConnected ? saved.origin : document.querySelector<HTMLElement>("select[aria-label='원본 후보를 추가할 장면']");
+      if (!target?.isConnected) return;
+      window.scrollTo({ top: saved.scrollY, behavior: "instant" }); target.focus({ preventScroll: true });
+      if (!saved.origin?.isConnected) target.scrollIntoView?.({ block: "center", behavior: "instant" });
+    });
+  };
   return <div className="page"><PageHeading eyebrow="FINAL IMAGE REVIEW" title="전체 장면을 한 번 더 확인하세요" text="Scene 순서와 핵심 업적 장면, 썸네일을 검토한 뒤 MP4를 만듭니다." />
     <SceneImageBatch project={project} batch={batch} />
+    <ImageLibrary key={project.id} project={project} busy={restoringImage} onRestore={onRestoreImage} onCompare={(sceneId, origin) => setComparison({ sceneId, sceneIds: orderedScenes(project).map(scene => scene.id), origin, scrollY: window.scrollY })} />
     <SceneReviewBoard project={project} view={view} onOpenScene={onOpenScene} onCompareImage={onCompareImage} />
+    {comparison && <ImageComparison project={project} sceneId={comparison.sceneId} sceneIds={comparison.sceneIds} scopeLabel="프로젝트의 모든 장면" onSceneChange={sceneId => setComparison(previous => previous && { ...previous, sceneId })} onApply={onCompareImage} onClose={closeComparison} />}
     <FullVideoPreview project={project} />
     <div className="panel"><h3>썸네일</h3>{project.thumbnail.candidates.find((candidate) => candidate.id === project.thumbnail.selected_candidate_id) ? <img className="review-thumbnail" src={project.thumbnail.candidates.find((candidate) => candidate.id === project.thumbnail.selected_candidate_id)!.preview_url} alt="선택 썸네일" /> : <p>선택된 썸네일이 없습니다.</p>}</div>
     {errors.length > 0 && <div className="error-banner"><strong>완료 전 확인할 항목</strong><ul>{errors.map((error, index) => <li key={index}>{error}</li>)}</ul></div>}

@@ -10,6 +10,26 @@ import { candidateAssetId, narrationAssetId } from "./media-composition";
 import { moveScene } from "./scene-order";
 import { EditorHistory } from "./editor-history";
 import { getRenderedVideo, saveRenderedVideo } from "./platform";
+import { originalImageIdentity, restoreImageCandidate } from "./image-library";
+import { readOriginalImageCandidate } from "./library-image-reader";
+
+it("restores a detached image from the same original, reopens it and exports identical bytes without a second registry entry", async () => {
+  const draft = editorProject(); draft.project_path = await createProjectOnDisk(draft);
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2" fill="red"/></svg>';
+  const candidate = { id: "original", path: `${draft.project_path}/03_images/scene01/original.svg`, preview_url: `data:image/svg+xml;base64,${btoa(svg)}`, mode: "mock" as const, created_at: "now" };
+  draft.scenes[0].candidates = [candidate]; draft.scenes[0].selected_candidate_id = candidate.id; await saveProject(draft);
+  const [original] = await listProjects(); original.scenes[0].candidates = []; original.scenes[0].selected_candidate_id = undefined; await saveProject(original);
+  const [detached] = await listProjects(), asset = detached.media!.assets[0];
+  const restoredCandidate = await readOriginalImageCandidate(detached, asset, async () => {});
+  const restored = restoreImageCandidate(detached, { projectId: detached.id, sceneId: detached.scenes[1].id, assetId: asset.id, expectedOriginal: originalImageIdentity(asset) }, restoredCandidate);
+  await saveProject(restored); const [reopened] = await listProjects();
+  expect(reopened.scenes[1].candidates[0].path).toBe(candidate.path); expect(reopened.scenes[1].selected_candidate_id).toBeUndefined(); expect(reopened.media!.assets).toHaveLength(1);
+  expect(await (await getMediaAsset(reopened, asset.id))!.text()).toBe(svg);
+  const zip = await JSZip.loadAsync(await (await buildProjectZip(reopened)).arrayBuffer()), root = `${reopened.folder_name}/`;
+  const manifest = JSON.parse(await zip.file(root + "01_source/media_manifest.json")!.async("string")); expect(manifest).toHaveLength(1);
+  expect(await zip.file(root + manifest[0].archive_path)!.async("string")).toBe(svg);
+  expect(JSON.parse(await zip.file(root + "project_data.json")!.async("string")).source).toEqual(draft.source);
+});
 
 const native = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: native.invoke }));

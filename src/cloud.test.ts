@@ -12,6 +12,18 @@ import { splitScene } from "./scene-split";
 import { mergeScene } from "./scene-merge";
 import { mergeProject } from "../tests/fixtures/merge-project";
 import { allCandidates } from "./media-composition";
+import { originalImageIdentity, restoreImageCandidate } from "./image-library";
+
+it("restores an image with its existing R2 key using the media RPC and never uploads or duplicates the original", async () => {
+  const asset = { id: "candidate:restored", kind: "image" as const, path: "projects/original/03_images/scene01/original.png", mime_type: "image/png", storage_key: "already-stored" };
+  const draft = prepareEditorWrite({ ...editorProject(), cloud_owner_id: userId, cloud_version: 0, media: { assets: [asset] } });
+  const restored = restoreImageCandidate(draft, { projectId: draft.id, sceneId: draft.scenes[1].id, assetId: asset.id, expectedOriginal: originalImageIdentity(asset) }, { id: "restored", path: asset.path, preview_url: "data:image/png;base64,iVBORw0KGgo=", mode: "uploaded", created_at: "now", storage_key: asset.storage_key });
+  rpc.mockResolvedValue({ data: [{ version: 1 }], error: null }); const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
+  await saveCloudProject(restored); expect(fetch).not.toHaveBeenCalled(); expect(rpc.mock.calls[0][0]).toBe("great100_save_media_project");
+  const stored = rpc.mock.calls[0][1].p_data; expect(stored.media.assets).toHaveLength(1); expect(stored.media.assets[0]).toMatchObject(asset);
+  expect(stored.scenes[1].candidates[0]).toMatchObject({ id: "restored", path: asset.path, storage_key: asset.storage_key, preview_url: "" });
+  expect(stored.scenes[1].selected_candidate_id).toBeUndefined(); expect(stored.source).toEqual(draft.source);
+});
 
 const userId = "alice";
 const session = { user: { id: userId }, access_token: "alice-token" } as Session;

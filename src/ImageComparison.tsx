@@ -87,7 +87,7 @@ function ComparisonScene({ project, scene, onApply, onNext, onClose, setBusy }: 
   </>;
 }
 
-export function ImageComparison({ project, sceneId, sceneIds, onSceneChange, onApply, onClose }: { project: ProjectData; sceneId: string; sceneIds: string[]; onSceneChange: (id: string) => void; onApply: Apply; onClose: () => void }) {
+export function ImageComparison({ project, sceneId, sceneIds, onSceneChange, onApply, onClose, scopeLabel = "열 때의 필터에 포함된 장면" }: { project: ProjectData; sceneId: string; sceneIds: string[]; onSceneChange: (id: string) => void; onApply: Apply; onClose: () => void; scopeLabel?: string }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [busy, setBusy] = useState(false);
   const queue = useMemo(() => orderedScenes(project).filter(scene => sceneIds.includes(scene.id)), [project, sceneIds]);
@@ -103,7 +103,7 @@ export function ImageComparison({ project, sceneId, sceneIds, onSceneChange, onA
   try { collectMediaAssets(project); if (scene) sceneComposition(scene); }
   catch (cause) { invalid = (cause as Error).message; }
   return <dialog ref={dialog} className="image-comparison-dialog" aria-labelledby="image-comparison-title" onCancel={event => { event.preventDefault(); onClose(); }}>
-    <header className="comparison-heading"><div><h2 id="image-comparison-title">후보 이미지 비교</h2><p>{scene ? `Scene ${scene.number} · ${scene.title}` : "비교하던 장면이 없어졌습니다."}</p><small>열 때의 필터에 포함된 장면 · {index >= 0 ? index + 1 : 0}/{queue.length}</small></div><div><button type="button" className="btn ghost" disabled={busy || index <= 0} onClick={() => go(-1)}><ArrowLeft size={14} /> 이전 비교 장면</button><button type="button" className="btn ghost" disabled={busy || index < 0 || index >= queue.length - 1} onClick={() => go(1)}>다음 비교 장면 <ArrowRight size={14} /></button><button type="button" className="btn ghost" aria-label="후보 비교 닫기" onClick={onClose}><X size={18} /></button></div></header>
+    <header className="comparison-heading"><div><h2 id="image-comparison-title">후보 이미지 비교</h2><p>{scene ? `Scene ${scene.number} · ${scene.title}` : "비교하던 장면이 없어졌습니다."}</p><small>{scopeLabel} · {index >= 0 ? index + 1 : 0}/{queue.length}</small></div><div><button type="button" className="btn ghost" disabled={busy || index <= 0} onClick={() => go(-1)}><ArrowLeft size={14} /> 이전 비교 장면</button><button type="button" className="btn ghost" disabled={busy || index < 0 || index >= queue.length - 1} onClick={() => go(1)}>다음 비교 장면 <ArrowRight size={14} /></button><button type="button" className="btn ghost" aria-label="후보 비교 닫기" onClick={onClose}><X size={18} /></button></div></header>
     {scene && !invalid ? <ComparisonScene key={scene.id} project={project} scene={scene} onApply={onApply} onNext={index >= 0 && index < queue.length - 1 ? () => go(1) : undefined} onClose={onClose} setBusy={setBusy} /> : <div className="comparison-empty"><p role="alert">{invalid || "작업 보드에서 최신 장면을 다시 선택해 주세요."}</p><button type="button" className="btn ghost" onClick={onClose}>작업 보드로 돌아가기</button></div>}
   </dialog>;
 }
