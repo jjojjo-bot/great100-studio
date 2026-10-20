@@ -6,6 +6,7 @@ import { editorProject } from "../tests/fixtures/editor-project";
 import { prepareEditorWrite } from "./editor-format";
 import type { ImageCandidate, ProjectData } from "./types";
 import App from "./App";
+import { sceneImageFilename } from "./scene-image-name";
 
 const mock = vi.hoisted(() => ({ list: vi.fn(), save: vi.fn(), upload: vi.fn(), inspect: vi.fn(), generate: vi.fn() }));
 vi.mock("./Auth", () => ({ AuthGate: ({ children }: { children: ReactNode }) => children, AccountMenu: () => null }));
@@ -36,6 +37,13 @@ async function files(...names: string[]) {
 }
 const apply = () => within(region()).getByRole("button", { name: /^연결안 적용/ });
 const saved = (): ProjectData => mock.save.mock.calls.at(-1)![0];
+
+it("uses a prompt bundle filename after reordering and leaves foreign project files unassigned", async () => {
+  const name = sceneImageFilename(project.id, project.scenes[0]), foreign = sceneImageFilename("other-project", project.scenes[1]);
+  await open(); fireEvent.click(screen.getByRole("button", { name: "Scene 1 편집" })); fireEvent.click(screen.getByRole("button", { name: "이 장면을 뒤로 이동" })); fireEvent.click(screen.getByRole("button", { name: "작업 보드로 돌아가기" }));
+  fireEvent.click(screen.getByRole("button", { name: "이미지 가져오기" })); await files(name, foreign); expect((screen.getByLabelText("파일 1 연결 장면") as HTMLSelectElement).value).toBe("scene_01"); expect((screen.getByLabelText("파일 2 연결 장면") as HTMLSelectElement).value).toBe("");
+  fireEvent.click(apply()); await waitFor(() => expect(region().textContent).toContain("연결 완료 1/2")); expect(mock.upload).toHaveBeenCalledOnce(); expect(mock.upload.mock.calls[0][1].scene_number).toBe(2); expect(saved().scenes[1].id).toBe("scene_01");
+});
 
 it("previews assignments without saving, leaves unknown files unassigned, and preserves existing screens", async () => {
   await open(); await files("scene_01.png", "02.png", "portrait.png");

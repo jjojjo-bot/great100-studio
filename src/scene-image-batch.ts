@@ -1,5 +1,6 @@
 import { detectImageFormat } from "./image-format";
 import { collectMediaAssets, resolveVideoIntroImage, sceneComposition, visualSelectionFingerprint as batchVisualFingerprint } from "./media-composition";
+import { sceneFromImageFilename } from "./scene-image-name";
 import type { ImageCandidate, ProjectData, Scene } from "./types";
 
 export const MAX_BATCH_IMAGES = 40;
@@ -9,7 +10,9 @@ export type BatchImageRequest = { projectId: string; sceneId: string; file: File
 
 // Only explicit scene labels or a leading number qualify. Dates, episode
 // numbers, and conflicting scene labels never silently become assignments.
-export function suggestedSceneId(name: string, scenes: Scene[]): string {
+export function suggestedSceneId(name: string, scenes: Scene[], projectId?: string): string {
+  const identified = sceneFromImageFilename(name, scenes, projectId);
+  if (identified !== undefined) return identified;
   const stem = name.replace(/\.[^.]+$/, "");
   const labels = [...stem.matchAll(/(?:(?:^|[^a-z0-9])scene|장면)[\s_.-]*0*(\d+)(?=$|[\s_.-])/gi)].map(match => Number(match[1]));
   const numbers = new Set(labels.length ? labels : [/^0*(\d+)(?=$|[\s_.-])/.exec(stem)?.[1]].filter(Boolean).map(Number));

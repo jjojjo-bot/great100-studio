@@ -18,6 +18,7 @@ export function SceneImageBatch({ project, batch }: { project: ProjectData; batc
     {open && <div id="batch-image-content">
       <div className="batch-toolbar"><input ref={input} className="file-input" type="file" multiple accept="image/png,image/jpeg,image/webp" aria-label="일괄 배치 이미지 파일 선택" disabled={locked} onChange={event => { const files = Array.from(event.target.files || []); event.target.value = ""; void batch.addFiles(files); }} /><button type="button" className="btn ghost" disabled={locked} onClick={() => input.current?.click()}><Upload size={15} /> 파일 추가</button><small>PNG·JPEG·WebP · 각 12MB · 최대 40장·합계 120MB</small>{!!batch.rows.length && <button type="button" className="btn ghost" disabled={locked} onClick={() => batch.remove()}>목록 비우기</button>}</div>
       <p className="batch-hint">scene_01.png, 장면2.jpg, 03_서재.webp처럼 이름을 붙이면 장면을 제안합니다. 연결되지 않은 파일은 장면을 직접 선택해 주세요. 선택하지 않은 파일은 적용하지 않습니다.</p>
+      <p className="batch-hint">프롬프트 묶음의 권장 파일명은 장면 순서가 바뀌어도 같은 장면을 찾습니다. 다른 프로젝트이거나 없어진 장면이면 직접 연결을 확인해 주세요.</p>
       {batch.error && <p className="error-banner" role="alert">{batch.error}</p>}
       {!!batch.rows.length && <>
         <fieldset className="batch-selection" disabled={locked}><legend>현재 화면 처리</legend><label><input type="radio" name="batch-selection" checked={batch.selection === "keep"} onChange={() => batch.setSelection("keep")} /> 기존 화면 유지 · 화면이 없으면 새 이미지 선택</label><label><input type="radio" name="batch-selection" checked={batch.selection === "replace"} onChange={() => batch.setSelection("replace")} /> 새 이미지로 교체</label></fieldset>

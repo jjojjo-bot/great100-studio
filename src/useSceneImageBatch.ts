@@ -40,7 +40,7 @@ export function useSceneImageBatch(project: ProjectData | null, onImport: (reque
       return;
     }
     preparingRef.current = true; setPreparing(true);
-    const rows: BatchRow[] = files.map(file => ({ id: crypto.randomUUID(), file, previewUrl: URL.createObjectURL(file), sceneId: suggestedSceneId(file.name, project.scenes), status: "checking" }));
+    const rows: BatchRow[] = files.map(file => ({ id: crypto.randomUUID(), file, previewUrl: URL.createObjectURL(file), sceneId: suggestedSceneId(file.name, project.scenes, project.id), status: "checking" }));
     update(id, current => ({ ...current, rows: [...current.rows, ...rows], error: "" }));
     try {
       for (const row of rows) {

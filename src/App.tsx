@@ -38,6 +38,7 @@ import { SceneTimingPanel } from "./SceneTimingPanel";
 import { FullVideoPreview } from "./FullVideoPreview";
 import { SceneReviewBoard } from "./SceneReviewBoard";
 import { SceneImageBatch } from "./SceneImageBatch";
+import { ScenePromptExport, useScenePromptExport, type ScenePromptExportController } from "./ScenePromptExport";
 import { useSceneImageBatch, type SceneImageBatchController } from "./useSceneImageBatch";
 import { attachBatchImage, type BatchImageRequest } from "./scene-image-batch";
 import { applyComparedImage, type ImageComparisonRequest, type ImageComparisonResult } from "./image-comparison";
@@ -357,6 +358,7 @@ function Studio() {
     return result.note + (saveFailures.current.has(current.id) ? " 프로젝트 저장은 상단에서 다시 시도해 주세요." : "");
   };
   const batchImages = useSceneImageBatch(project, importBatchImage);
+  const promptExport = useScenePromptExport(project);
   const mediaCheck = useExportMediaCheck(project);
   const [mediaCheckReturn, setMediaCheckReturn] = useState<{ projectId: string; scrollY: number }>();
   const openMediaCheckLocation = (location: CheckLocation) => {
@@ -507,7 +509,7 @@ function Studio() {
           {step === 4 && project && <AssetStudio title="인물 기준 이미지" eyebrow="CHARACTER ANCHOR" description="얼굴 일관성을 위한 기준 이미지입니다. 업로드한 이미지가 있으면 생성 단계를 건너뛰어도 됩니다." asset={project.anchor} project={project} kind="anchor" onChange={(anchor, options) => persist({ ...project, anchor }, options)} />}
           {step === 5 && project && <><div className="review-return-actions">{reviewView?.anchor && <button type="button" className="btn ghost" onClick={() => { reviewView.returning = true; setStep(7); }}><ArrowLeft size={15} /> 작업 보드로 돌아가기</button>}</div><SceneStudio key={project.id} project={project} activeSceneId={activeScenes[project.id]} onActiveSceneChange={id => setActiveScenes(previous => ({ ...previous, [project.id]: id }))} onChange={updateScene} onProjectChange={persist} onTimingChange={applyNarrationTiming} onGeneratedNarration={selectGeneratedNarration} onMove={changeSceneOrder} onSplit={divideScene} onMerge={combineScene} /></>}
           {step === 6 && project && <AssetStudio title="썸네일 만들기" eyebrow="THUMBNAIL" description="대표 이미지를 선택하세요. 선택한 썸네일은 영상 마지막 인물 이름 화면의 배경에도 사용됩니다." asset={project.thumbnail} project={project} kind="thumbnail" onChange={(thumbnail, options) => persist({ ...project, thumbnail }, options)} />}
-          {step === 7 && project && <ImageReview key={project.id} project={project} view={reviewView!} onOpenScene={openReviewScene} batch={batchImages} onCompareImage={confirmComparedImage} restoringImage={restoringImage} onRestoreImage={restoreOriginalImage} mediaCheck={mediaCheck} onOpenMediaCheck={openMediaCheckLocation} />}
+          {step === 7 && project && <ImageReview key={project.id} project={project} view={reviewView!} onOpenScene={openReviewScene} batch={batchImages} onCompareImage={confirmComparedImage} restoringImage={restoringImage} onRestoreImage={restoreOriginalImage} mediaCheck={mediaCheck} onOpenMediaCheck={openMediaCheckLocation} promptExport={promptExport} />}
           {step === 8 && project && <Complete project={project} onDownload={() => download(project)} />}
         </section>
 
@@ -634,7 +636,7 @@ function Preflight({ project }: { project: ProjectData }) {
   </div>;
 }
 
-function ImageReview({ project, view, onOpenScene, batch, onCompareImage, restoringImage, onRestoreImage, mediaCheck, onOpenMediaCheck }: { project: ProjectData; view: ReviewView; onOpenScene: (sceneId: string) => void; batch: SceneImageBatchController; onCompareImage: (request: ImageComparisonRequest) => Promise<ImageComparisonResult>; restoringImage: boolean; onRestoreImage: (request: RestoreImageRequest) => Promise<RestoreImageResult>; mediaCheck: ExportMediaCheckController; onOpenMediaCheck: (location: CheckLocation) => void }) {
+function ImageReview({ project, view, onOpenScene, batch, onCompareImage, restoringImage, onRestoreImage, mediaCheck, onOpenMediaCheck, promptExport }: { project: ProjectData; view: ReviewView; onOpenScene: (sceneId: string) => void; batch: SceneImageBatchController; onCompareImage: (request: ImageComparisonRequest) => Promise<ImageComparisonResult>; restoringImage: boolean; onRestoreImage: (request: RestoreImageRequest) => Promise<RestoreImageResult>; mediaCheck: ExportMediaCheckController; onOpenMediaCheck: (location: CheckLocation) => void; promptExport: ScenePromptExportController }) {
   const errors = completionErrors(project);
   const [comparison, setComparison] = useState<{ sceneId: string; sceneIds: string[]; origin: HTMLElement | null; scrollY: number }>();
   const closeComparison = () => {
@@ -647,6 +649,7 @@ function ImageReview({ project, view, onOpenScene, batch, onCompareImage, restor
     });
   };
   return <div className="page"><PageHeading eyebrow="FINAL IMAGE REVIEW" title="전체 장면을 한 번 더 확인하세요" text="Scene 순서와 핵심 업적 장면, 썸네일을 검토한 뒤 MP4를 만듭니다." />
+    <ScenePromptExport project={project} selection={promptExport} />
     <SceneImageBatch project={project} batch={batch} />
     <ImageLibrary key={project.id} project={project} busy={restoringImage} onRestore={onRestoreImage} onCompare={(sceneId, origin) => setComparison({ sceneId, sceneIds: orderedScenes(project).map(scene => scene.id), origin, scrollY: window.scrollY })} />
     <ExportMediaCheck check={mediaCheck} onOpen={onOpenMediaCheck} />

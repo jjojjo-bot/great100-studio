@@ -304,3 +304,26 @@
 .media-check-list span{min-width:0;overflow-wrap:anywhere}
 .media-check-list small{display:block;color:#87938b;line-height:1.6;margin-top:4px}
 @media(max-width:1200px){.media-check-heading{align-items:start;flex-direction:column}}
+
+.scene-prompt-export{padding:20px;margin-bottom:24px}
+.prompt-export-heading{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.prompt-export-heading h3{display:flex;align-items:center;gap:8px;color:#214a43;margin:0 0 7px}
+.prompt-export-heading p,.prompt-export-hint{font-size:12px;line-height:1.7;color:#718178;margin:0}
+.prompt-export-heading>.btn{flex-shrink:0}
+.prompt-export-selection,.prompt-export-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:16px 0 10px}
+.prompt-export-selection>span{margin-left:auto;font-size:12px;color:#52625d}
+.prompt-export-rows{max-height:360px;overflow:auto;border:1px solid #e0dbcf;border-radius:8px;margin:14px 0}
+.prompt-export-row{display:grid;grid-template-columns:minmax(220px,1fr) minmax(280px,1fr);gap:16px;padding:12px;border-bottom:1px solid #e0dbcf}
+.prompt-export-row:last-child{border-bottom:0}
+.prompt-export-row>label:first-child{display:flex;align-items:center;gap:10px;min-width:0;color:#355d50;font-size:12px}
+.prompt-export-row input[type=checkbox]{width:16px;height:16px;flex-shrink:0;accent-color:#214a43}
+.prompt-export-row strong{overflow-wrap:anywhere}
+.prompt-export-row small{display:block;color:#87938b;font-size:11px;margin-top:5px}
+.prompt-export-filename{display:grid;gap:5px;min-width:0;font-size:10px;color:#718178}
+.prompt-export-filename input{width:100%;min-width:0;font-size:11px;padding:7px 9px}
+.prompt-export-preview{display:grid;gap:8px;color:#52625d;font-size:12px;margin:14px 0}
+.prompt-export-preview textarea{width:100%;min-height:280px;max-height:560px;resize:vertical;font-size:12px;line-height:1.7}
+.prompt-export-warning{color:#a24931;background:#fff1e8;border:1px solid #e8c9b5;border-radius:7px;padding:10px;font-size:12px;line-height:1.7;margin:10px 0}
+.prompt-export-feedback{color:#355d50;background:#edf2e7;border-radius:7px;padding:10px;font-size:12px;line-height:1.7;margin:10px 0}
+.prompt-export-empty{font-size:12px;text-align:center;padding:18px;color:#87938b}
+@media(max-width:1100px){.prompt-export-row{grid-template-columns:1fr}}
