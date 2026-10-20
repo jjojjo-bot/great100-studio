@@ -71,7 +71,7 @@ it("keeps late generation results when undoing an edit made during generation", 
   await scenes();
   const caption = screen.getByLabelText("영상 자막") as HTMLTextAreaElement;
   const original = caption.value;
-  fireEvent.click(screen.getByRole("button", { name: "후보 3장 생성" }));
+  fireEvent.click(screen.getByRole("button", { name: "예시 3장 만들기" }));
   await waitFor(() => expect(mock.generate).toHaveBeenCalledOnce());
   expect(mock.generate.mock.calls[0][0].reference_image).toBe("data:image/png;base64,iVBORw0KGgo=");
   expect(mock.reference.mock.calls[0][0].anchor.candidates[0].mode).toBe("uploaded");
@@ -87,7 +87,7 @@ it("keeps late generation results when undoing an edit made during generation", 
 it("uses the same selected uploaded reference for thumbnail generation", async () => {
   await scenes();
   fireEvent.click(screen.getByRole("button", { name: "다음 단계" }));
-  fireEvent.click(screen.getByRole("button", { name: "후보 3장 생성" }));
+  fireEvent.click(screen.getByRole("button", { name: "예시 3장 만들기" }));
   await waitFor(() => expect(mock.generate).toHaveBeenCalledOnce());
   expect(mock.generate.mock.calls[0][0]).toMatchObject({ asset_kind: "thumbnail", reference_image: "data:image/png;base64,iVBORw0KGgo=" });
   expect(within(screen.getByRole("group", { name: "편집 이력" })).getByRole("button", { name: "실행 취소" }).hasAttribute("disabled")).toBe(true);
@@ -101,7 +101,7 @@ it("keeps the active project's undo history when a background project finishes g
   render(<App />);
   fireEvent.click((await screen.findAllByRole("button", { name: "이어 작업하기" }))[0]);
   for (let index = 0; index < 3; index++) fireEvent.click(screen.getByRole("button", { name: "다음 단계" }));
-  fireEvent.click(screen.getByRole("button", { name: "후보 3장 생성" }));
+  fireEvent.click(screen.getByRole("button", { name: "예시 3장 만들기" }));
   await waitFor(() => expect(mock.generate).toHaveBeenCalledOnce());
   fireEvent.click(within(screen.getByRole("navigation", { name: "제작 단계" })).getByRole("button", { name: /대시보드$/ }));
   fireEvent.click(screen.getAllByRole("button", { name: "이어 작업하기" })[1]);

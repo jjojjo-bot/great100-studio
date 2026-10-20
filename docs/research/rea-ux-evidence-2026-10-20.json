@@ -1,0 +1,160 @@
+{
+  "date": "2026-10-20",
+  "scope": "Great100 usability improvements",
+  "reference": {
+    "url": "https://vrew.ai/try/index.html",
+    "observedVersion": "4.7.2",
+    "status": "Public entry/editor shell observed; demo loading/browser compatibility restriction prevents validating actual editing behavior.",
+    "actionAuthority": "Vrew demo was requested through a separate owned Playwright session; REA inspected the resulting browser state. Great100's navigation scenario actions were executed by REA."
+  },
+  "staticEvidence": {
+    "id": "ev_f67eb1008c8b5787bdedbb23453173aa9a1657920e4efab437453ec6d18c94bd",
+    "coverage": "Retained partial JavaScript graph; reused, not reanalyzed.",
+    "trace": {
+      "id": "ev_c35ed89ec53a2deea75149ac26e1fbc689600b4ed65dbbabaaaa8ad824026fa3",
+      "literal": "undoAction",
+      "result": "No matching graph seed; does not establish feature absence."
+    }
+  },
+  "records": [
+    {
+      "key": "ux_vrew_final_inspect",
+      "id": "ev_def2bf3d5767d9fb4086084e5e5980526e7c708118d1bdd264b7ca1fff3a4b4b",
+      "operation": "inspect_web_page",
+      "provider": {
+        "id": "rea-cdp-browser",
+        "name": "REA Chrome DevTools Protocol observation provider",
+        "version": "2"
+      },
+      "coverage": "policy_filtered",
+      "limitations": [
+        "Artifact identity is unavailable for this observation.",
+        "Observation starts when REA attaches; prior network and console activity is unavailable.",
+        "Raw network headers, bodies, cookies, storage values, console objects, and WebSocket payloads are never retained; explicitly requested primitive console text is retained verbatim, while payload captures retain value-free shapes.",
+        "Source maps are reported only as declarative URLs and are not fetched.",
+        "URL-less scripts and console events without an allowed source URL are excluded because their origin cannot be proven.",
+        "CDP discovery omitted the target attachment state; attached is reported as unknown.",
+        "Browser host platform and architecture were not observed."
+      ]
+    },
+    {
+      "key": "ux_great100_before",
+      "id": "ev_4f792de10b36e890d68a1b5f381e3dc653871eae21ef7370e0ba428638f0e7cd",
+      "operation": "inspect_web_page",
+      "provider": {
+        "id": "rea-cdp-browser",
+        "name": "REA Chrome DevTools Protocol observation provider",
+        "version": "2"
+      },
+      "coverage": "policy_filtered",
+      "limitations": [
+        "Artifact identity is unavailable for this observation.",
+        "Observation starts when REA attaches; prior network and console activity is unavailable.",
+        "Raw network headers, bodies, cookies, storage values, console objects, and WebSocket payloads are never retained; explicitly requested primitive console text is retained verbatim, while payload captures retain value-free shapes.",
+        "Source maps are reported only as declarative URLs and are not fetched.",
+        "URL-less scripts and console events without an allowed source URL are excluded because their origin cannot be proven.",
+        "CDP discovery omitted the target attachment state; attached is reported as unknown.",
+        "Browser host platform and architecture were not observed."
+      ]
+    },
+    {
+      "key": "ux_great100_after",
+      "id": "ev_9316f4d0df329e633565e34dde97d8e2cca2caaac457e61e2319c8fe32f3310d",
+      "operation": "inspect_web_page",
+      "provider": {
+        "id": "rea-cdp-browser",
+        "name": "REA Chrome DevTools Protocol observation provider",
+        "version": "2"
+      },
+      "coverage": "policy_filtered",
+      "limitations": [
+        "Artifact identity is unavailable for this observation.",
+        "Observation starts when REA attaches; prior network and console activity is unavailable.",
+        "Raw network headers, bodies, cookies, storage values, console objects, and WebSocket payloads are never retained; explicitly requested primitive console text is retained verbatim, while payload captures retain value-free shapes.",
+        "Source maps are reported only as declarative URLs and are not fetched.",
+        "URL-less scripts and console events without an allowed source URL are excluded because their origin cannot be proven.",
+        "CDP discovery omitted the target attachment state; attached is reported as unknown.",
+        "Browser host platform and architecture were not observed."
+      ]
+    },
+    {
+      "key": "ux_great100_flow",
+      "id": "ev_124341f0208516f2f082ac8b6a48177439c38bd9847b803f74a9a4ce255c722a",
+      "operation": "capture_browser_scenario",
+      "provider": {
+        "id": "rea-playwright-browser-scenario",
+        "name": "REA Playwright browser scenario capture provider",
+        "version": "1"
+      },
+      "coverage": "incomplete",
+      "limitations": [
+        "Artifact identity is unavailable for this observation.",
+        "Event sequence records provider receipt order; simultaneous browser causality is not inferred.",
+        "Network content is retained only when selected; Playwright response-body bytes are API results and are not guaranteed to match wire bytes.",
+        "Request bytes are limited to what Playwright exposes; not_exposed does not establish body absence or multipart file coverage.",
+        "Network content reads settle within 5 seconds each and the observer does not request bodies from unfinished responses.",
+        "Playwright scenario events do not expose request initiator stacks; receipt order does not prove causality.",
+        "Storage values are hashed only after declared-secret redaction.",
+        "CDP attachment cannot recover pre-attach events or guarantee launch-time context options.",
+        "Attached locale en-US applies to Intl formatting only; navigator.language(s) and Accept-Language remain caller-controlled. Use launch mode for matching page and request languages.",
+        "Detaching a CDP page session may clear caller-owned navigator.platform emulation. REA cannot snapshot the caller's complete user-agent/client-hint state before attachment; use launch mode to avoid mutating that external browser.",
+        "Browser host platform and architecture were not observed."
+      ]
+    },
+    {
+      "key": "ux_great100_comparison",
+      "id": "ev_125cd026a2bd9d3ea0b9ea0c081a7dd6e2218566e9eac567394a4815cde1875b",
+      "operation": "compare_web_captures",
+      "provider": {
+        "id": "rea-cdp-browser",
+        "name": "REA Chrome DevTools Protocol observation provider",
+        "version": "2"
+      },
+      "coverage": "changed",
+      "limitations": [
+        "Artifact identity is unavailable for this observation.",
+        "A changed status proves an observed difference; an unknown status means absence could not be established from capture completeness.",
+        "Network comparison covers only activity observed after each CDP attachment. WebSocket connections with the same URL are compared as an unordered collection of ordered frame streams, retaining connection counts; their individual identities are not stable across captures.",
+        "Accessibility roles, ignored state, text, and hierarchy are compared only when the accessibility tree was fully captured and text capture was selected and not truncated.",
+        "Storage key inventories are compared only when selected and complete; usage and quota are compared only when reported. Redacted content is compared through complete SHA-256 fingerprints."
+      ]
+    }
+  ],
+  "fullExport": {
+    "path": "/tmp/great100-ux-rea-evidence.json",
+    "bytes": 50353561,
+    "records": 21,
+    "retention": "Temporary local file, not committed or guaranteed durable."
+  },
+  "validation": {
+    "unit": {
+      "files": 69,
+      "tests": 478
+    },
+    "browser": {
+      "widths": [
+        320,
+        390,
+        768,
+        1024,
+        1440
+      ],
+      "editingScreens": 30,
+      "horizontalOverflow": false,
+      "originalAssetHashesVerified": 54,
+      "apiCalls": 0,
+      "pageErrors": 0
+    },
+    "render": {
+      "actualMp4": true,
+      "seconds": 31,
+      "frames": 465,
+      "zipIncludesVideo": true,
+      "originalHashesPreserved": 54
+    },
+    "limits": [
+      "Synthetic browser-local projects; production signed-in Supabase/R2 writes and packaged Tauri operation were not verified.",
+      "Static graph and browser observations cannot establish proprietary server-side implementation or full Vrew behavior."
+    ]
+  }
+}

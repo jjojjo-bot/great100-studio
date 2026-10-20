@@ -59,7 +59,7 @@ it("retains the merged-away scene's late generation in the merged palette and re
   let finish!: (candidates: ImageCandidate[]) => void;
   mock.generate.mockReturnValue(new Promise<ImageCandidate[]>(resolve => { finish = resolve; }));
   await open(); fireEvent.click(screen.getByRole("button", { name: "다음 Scene" }));
-  fireEvent.click(screen.getByRole("button", { name: "후보 2장 생성" }));
+  fireEvent.click(screen.getByRole("button", { name: "예시 2장 만들기" }));
   await waitFor(() => expect(mock.generate).toHaveBeenCalledOnce());
   fireEvent.click(screen.getByRole("button", { name: "이전 Scene" }));
   fireEvent.click(screen.getByRole("button", { name: "다음 장면과 합치기" }));
@@ -100,7 +100,7 @@ it("retains late generation on an undone child for redo without resurrecting tha
   mock.generate.mockReturnValue(new Promise<ImageCandidate[]>(resolve => { finish = resolve; }));
   await open(); fireEvent.click(screen.getByRole("button", { name: "장면 나누기" }));
   fireEvent.click(screen.getByRole("button", { name: "다음 Scene" }));
-  fireEvent.click(screen.getByRole("button", { name: "후보 2장 생성" }));
+  fireEvent.click(screen.getByRole("button", { name: "예시 2장 만들기" }));
   await waitFor(() => expect(mock.generate).toHaveBeenCalledOnce());
   undo(); expect(tabTitles()).toHaveLength(3);
   const candidate: ImageCandidate = { id: "detached", path: "projects/original/detached.png", preview_url: "data:image/png;base64,a", mode: "openai", created_at: "now" };
@@ -138,7 +138,7 @@ it("moves the active scene, retains a previous caption edit and undoes each oper
 it("keeps a generation result started before the move on the same scene through undo and redo", async () => {
   let finish!: (candidates: ImageCandidate[]) => void;
   mock.generate.mockReturnValue(new Promise<ImageCandidate[]>(resolve => { finish = resolve; }));
-  await open(); fireEvent.click(screen.getByRole("button", { name: "후보 2장 생성" }));
+  await open(); fireEvent.click(screen.getByRole("button", { name: "예시 2장 만들기" }));
   await waitFor(() => expect(mock.generate).toHaveBeenCalledOnce());
   moveBack();
   const candidate: ImageCandidate = { id: "late", path: "projects/original/03_images/scene01/late.png", preview_url: "data:image/png;base64,a", mode: "openai", created_at: "now" };

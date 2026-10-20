@@ -81,7 +81,7 @@ it("cancels a long-file proposal without saving the file or changing the project
 it("preserves a generation result started before the timing-format upgrade, including after undo", async () => {
   let finish!: (value: unknown[]) => void;
   mock.generate.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
-  await open(); fireEvent.click(screen.getByRole("button", { name: "후보 2장 생성" }));
+  await open(); fireEvent.click(screen.getByRole("button", { name: "예시 2장 만들기" }));
   await waitFor(() => expect(mock.generate).toHaveBeenCalledOnce());
   await upload(); fireEvent.click(screen.getByLabelText("자막 비율 재배치"));
   fireEvent.click(screen.getByRole("button", { name: "시간 조정 적용" }));
