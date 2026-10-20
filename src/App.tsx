@@ -44,6 +44,7 @@ import { proposeNarrationTiming, timingFingerprint, type TimingRequest } from ".
 import { AccountMenu, AuthGate } from "./Auth";
 import { checkCloudStorage, cloudContext } from "./cloud";
 import { mergeProjectChanges } from "./project-changes";
+import { prepareMediaProject } from "./media-composition";
 import { LocalProjectImport } from "./LocalProjectImport";
 import { VisitorTrends } from "./VisitorTrends";
 import type { ImageCandidate, ImageMotion, ProjectData, Scene, VisualAsset } from "./types";
@@ -177,12 +178,16 @@ function Studio() {
 
   const persist = async (next: ProjectData, options: EditOptions = {}) => {
     const current = latestProjects.current.get(next.id) || next;
-    // In-flight callbacks from this client may predate a timing-format upgrade.
+    // In-flight callbacks from this client may predate an editor-format upgrade.
     // Merge their changed fields into the current version without downgrading it.
-    next = prepareEditorWrite({ ...next, editor_version: Math.max(next.editor_version ?? 0, current.editor_version ?? 0) });
-    try { assertEditorWrite(next, current); }
+    next = { ...next, editor_version: Math.max(next.editor_version ?? 0, current.editor_version ?? 0) };
+    let merged: ProjectData;
+    try {
+      assertEditorReadable(next);
+      merged = prepareEditorWrite(prepareMediaProject(mergeProjectChanges(options.base || project, next, current), current));
+      assertEditorWrite(merged, current);
+    }
     catch (error) { setNotice((error as Error).message); return; }
-    const merged = mergeProjectChanges(options.base || project, next, current);
     const previousTime = Date.parse(current.updated_at);
     const updated = { ...merged, updated_at: new Date(Math.max(Date.now(), Number.isFinite(previousTime) ? previousTime + 1 : 0)).toISOString(), app_state: merged.schema_version !== 1 ? {
       ...merged.app_state,
@@ -685,7 +690,7 @@ function CandidateGrid({ candidates, selected, onSelect, onDelete, emptyLabel }:
     if (!onDelete) return;
     const media = candidate.media_type === "video" ? "동영상" : "이미지";
     const selectedWarning = selected === candidate.id ? "\n선택된 후보라서 다시 다른 후보를 골라야 합니다." : "";
-    if (!window.confirm(`${media} 후보 ${index + 1} 삭제할까요?${selectedWarning}\n\n삭제한 파일은 복구할 수 없고, 기존 MP4는 다시 만들어야 합니다.`)) return;
+    if (!window.confirm(`${media} 후보 ${index + 1} 삭제할까요?${selectedWarning}\n\n후보 목록에서는 제거되고, 원본은 프로젝트를 삭제할 때까지 보관됩니다. 기존 MP4는 다시 만들어야 합니다.`)) return;
     setDeletingId(candidate.id); setError("");
     try { await onDelete(candidate.id); }
     catch (cause) { setError(`후보 삭제 실패: ${String(cause)}`); }

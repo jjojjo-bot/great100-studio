@@ -5,6 +5,7 @@ import { createProjectDraft } from "./parser";
 import { SAMPLE_WORK_TEXT } from "./sample";
 import { importLocalProject, listLocalProjects, localProjectsForImport } from "./platform";
 import type { ProjectData } from "./types";
+import { prepareEditorWrite } from "./editor-format";
 
 const mock = vi.hoisted(() => ({
   create: vi.fn(), read: vi.fn(), save: vi.fn(), upload: vi.fn(), export: vi.fn(),
@@ -51,7 +52,7 @@ async function seed() {
   await db.put("audio", { id: project.id, blob: new Blob(["music"], { type: "audio/mpeg" }) });
   await db.put("audio", { id: `${project.id}:narration:${project.scenes[0].id}`, blob: new Blob(["voice"], { type: "audio/wav" }) });
   await db.put("media", { id: `${project.id}:scene-video:video`, blob: new Blob(["video"], { type: "video/mp4" }) });
-  await db.put("videos", { id: project.id, updated_at: project.updated_at, render_version: 9, blob: new Blob(["export"], { type: "video/mp4" }) });
+  await db.put("videos", { id: project.id, updated_at: project.updated_at, render_version: 10, blob: new Blob(["export"], { type: "video/mp4" }) });
   db.close(); return project;
 }
 
@@ -96,4 +97,22 @@ it("keeps an older rendered MP4 locally and requires regeneration for the new ti
   expect((await db.get("videos", project.id)).render_version).toBe(8);
   expect([...mock.saved.values()][0].migration_pending).toBe(false);
   db.close();
+});
+
+it("transfers detached originals with stable asset identities and interval references", async () => {
+  const original = prepareEditorWrite(await seed());
+  const voiceId = original.scenes[0].composition!.narrations[0].asset_id;
+  original.anchor.candidates = []; original.anchor.selected_candidate_id = undefined;
+  original.scenes[0].narration_audio = undefined;
+  // The interval keeps referring to the detached voice; refresh its legacy-control signature.
+  const { compositionSignature } = await import("./media-composition");
+  original.scenes[0].composition!.source_signature = compositionSignature(original.scenes[0]);
+  const db = await openDB("great100-studio", 6); await db.put("projects", original);
+  await importLocalProject(original.id);
+  const migrated = [...mock.saved.values()][0];
+  expect(migrated.editor_version).toBe(3); expect(migrated.media!.assets).toHaveLength(6);
+  expect(migrated.media!.assets.find(asset => asset.id === voiceId)).toMatchObject({ storage_key: expect.any(String), path: expect.stringContaining("projects/009_이순신/") });
+  expect(migrated.scenes[0].composition!.narrations[0].asset_id).toBe(voiceId);
+  expect(mock.upload).toHaveBeenCalledTimes(7);
+  expect(await db.get("projects", original.id)).toEqual(original); db.close();
 });

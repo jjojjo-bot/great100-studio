@@ -54,7 +54,7 @@ it("backs up a legacy project on first save, preserves editor fields on reopen/Z
 });
 
 it("retains newer projects in the list but refuses to overwrite their format", async () => {
-  const project = { ...editorProject(), editor_version: 3 };
+  const project = { ...editorProject(), editor_version: 4 };
   await listProjects();
   const db = await openDB("great100-studio", 6);
   await db.put("projects", project);

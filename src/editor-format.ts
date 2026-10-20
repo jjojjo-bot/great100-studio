@@ -1,6 +1,7 @@
 import type { ProjectData, Scene } from "./types";
+import { mediaCompositionErrors, prepareMediaProject } from "./media-composition";
 
-export const EDITOR_VERSION = 2;
+export const EDITOR_VERSION = 3;
 const nonempty = (value: unknown): value is string => typeof value === "string" && !!value.trim();
 const sourceJson = (value: unknown) => JSON.stringify(value, (_key, item) => item && typeof item === "object" && !Array.isArray(item)
   ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
@@ -18,6 +19,13 @@ export function assertEditorWrite(project: ProjectData, stored?: ProjectData): v
   assertEditorReadable(stored);
   if ((stored.editor_version ?? 0) > (project.editor_version ?? 0)) {
     throw new Error("저장된 프로젝트의 편집 형식이 더 최신입니다. 최신 작업을 다시 열어 주세요.");
+  }
+  for (const asset of stored.media?.assets || []) {
+    const next = project.media?.assets.find(item => item.id === asset.id);
+    if (!next || next.path !== asset.path || next.kind !== asset.kind || next.local_key !== asset.local_key || next.local_store !== asset.local_store
+      || next.mime_type !== asset.mime_type || next.duration_sec !== asset.duration_sec || (asset.storage_key && next.storage_key !== asset.storage_key)
+      || (asset.preview_storage_key && next.preview_storage_key !== asset.preview_storage_key)
+      || (asset.inline_data && !next.storage_key && next.inline_data !== asset.inline_data)) throw new Error("보관 중인 원본 자료는 제거하거나 교체할 수 없습니다. 최신 작업을 다시 열어 주세요.");
   }
   if (Math.max(stored.editor_version ?? 0, project.editor_version ?? 0) >= 1 && (
     stored.source_text !== project.source_text || sourceJson(stored.source) !== sourceJson(project.source)
@@ -54,8 +62,10 @@ export function isCoreScene(project: ProjectData, scene: Scene): boolean {
 }
 
 export function prepareEditorWrite(project: ProjectData): ProjectData {
-  if ((project.editor_version ?? 0) >= 2 || !project.scenes.some(scene => scene.narration_audio?.id)) return project;
-  return { ...readEditorProject(project), editor_version: 2 };
+  assertEditorReadable(project);
+  const next = (project.editor_version ?? 0) < 2 && project.scenes.some(scene => scene.narration_audio?.id)
+    ? { ...readEditorProject(project), editor_version: 2 } : project;
+  return prepareMediaProject(readEditorProject(next));
 }
 
 export function editorIdentityErrors(project: ProjectData): string[] {
@@ -82,5 +92,5 @@ export function editorIdentityErrors(project: ProjectData): string[] {
       }
     }
   }
-  return errors;
+  return [...errors, ...mediaCompositionErrors(project)];
 }

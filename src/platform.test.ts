@@ -106,7 +106,7 @@ describe("background music storage", () => {
     expect(() => detectMusicFormat({ name: "music.mp3", type: "audio/mpeg", size: 100_000_001 })).toThrow("100MB");
   });
 
-  it("stores the uploaded file separately, includes it in ZIP, and removes it cleanly", async () => {
+  it("stores the uploaded file separately, includes it in ZIP, and retains its original until project deletion", async () => {
     vi.stubGlobal("window", {});
     vi.stubGlobal("AudioContext", class {
       decodeAudioData = async () => ({ length: 1, duration: 1 });
@@ -121,12 +121,14 @@ describe("background music storage", () => {
     const zip = await JSZip.loadAsync(await (await buildProjectZip(project)).arrayBuffer());
     expect(zip.file(`${project.folder_name}/01_source/background_music.mp3`)).not.toBeNull();
     await removeBackgroundMusic(project);
+    expect((await getBackgroundMusic(project))?.size).toBe(file.size);
+    await deleteProject(project);
     expect(await getBackgroundMusic(project)).toBeNull();
   });
 });
 
 describe("scene narration storage", () => {
-  it("uploads and exports one scene recording, then removes it", async () => {
+  it("uploads and exports one scene recording, then unlinks it while retaining the original", async () => {
     vi.stubGlobal("window", {});
     vi.stubGlobal("AudioContext", class {
       decodeAudioData = async () => ({ duration: 1.25 });
@@ -143,6 +145,8 @@ describe("scene narration storage", () => {
     const zip = await JSZip.loadAsync(await (await buildProjectZip(project)).arrayBuffer());
     expect(zip.file(`${project.folder_name}/03_images/scene01/narration.wav`)).not.toBeNull();
     await removeSceneNarration(project, scene);
+    expect((await getSceneNarration(project, scene))?.size).toBe(file.size);
+    await deleteProject(project);
     expect(await getSceneNarration(project, scene)).toBeNull();
   });
 
@@ -187,7 +191,7 @@ describe("project deletion", () => {
 });
 
 describe("candidate deletion", () => {
-  it("removes only the selected clip blob and invalidates the cached render", async () => {
+  it("retains the unlinked clip and invalidates the render when edited metadata is saved", async () => {
     vi.stubGlobal("window", {});
     const project = createProjectDraft(26, "후보 삭제 시험", "장군 · 지도자", SAMPLE_WORK_TEXT);
     project.project_path = await createProjectOnDisk(project);
@@ -203,9 +207,13 @@ describe("candidate deletion", () => {
     await db.put("media", { id: keptKey, blob: new Blob(["keep"]) });
     await expect(deleteCandidateAsset(project, "thumbnail", clip)).rejects.toThrow("현재 프로젝트");
     await deleteCandidateAsset(project, "scene", clip, scene.number);
-    expect(await db.get("media", removedKey)).toBeUndefined();
+    expect(await db.get("media", removedKey)).toBeDefined();
     expect(await db.get("media", keptKey)).toBeDefined();
-    expect(await getRenderedVideo(project)).toBeNull();
+    const edited = { ...project, updated_at: new Date(Date.parse(project.updated_at) + 1000).toISOString(), scenes: project.scenes.map(item => item.id === scene.id ? { ...item, candidates: [] } : item) };
+    await saveProject(edited);
+    expect(await getRenderedVideo(edited)).toBeNull();
+    await deleteProject(edited);
+    expect(await db.get("media", removedKey)).toBeUndefined();
   });
 });
 

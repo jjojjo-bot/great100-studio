@@ -15,6 +15,7 @@ const prefix = `${userId}/${projectId}/`;
 let owned = true;
 let databaseError: object | null = null;
 let filters: [string, unknown][];
+let retained: Array<{ storage_key?: string; preview_storage_key?: string }>;
 
 async function call(body: object, authorization = "Bearer user-token") {
   const result = { status: 200, body: undefined as any };
@@ -27,12 +28,12 @@ beforeEach(() => {
   vi.stubEnv("VITE_SUPABASE_URL", "https://test.supabase.co"); vi.stubEnv("VITE_SUPABASE_PUBLISHABLE_KEY", "public-key");
   for (const name of ["R2_ACCOUNT_ID", "R2_BUCKET_NAME", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"]) vi.stubEnv(name, "test-value");
   mock.getUser.mockResolvedValue({ data: { user: { id: userId } }, error: null });
-  owned = true; databaseError = null; filters = [];
+  owned = true; databaseError = null; filters = []; retained = [];
   mock.from.mockImplementation(() => {
     const query = {
       select: () => query,
       eq: (key: string, value: unknown) => { filters.push([key, value]); return query; },
-      maybeSingle: async () => ({ data: owned ? { id: projectId } : null, error: databaseError }),
+      maybeSingle: async () => ({ data: owned ? { id: projectId, data: { media: { assets: retained } } } : null, error: databaseError }),
       limit: async () => ({ data: [], error: databaseError }),
     };
     return query;
@@ -94,4 +95,14 @@ it("deletes every page under the owned prefix and stops on partial failures", as
   expect(commands.find(command => command instanceof DeleteObjectsCommand).input.Delete.Objects).toEqual([{ Key: `${prefix}one.mp4` }, { Key: `${prefix}two.png` }]);
   mock.send.mockImplementation(async command => command instanceof ListObjectsV2Command ? { Contents: [{ Key: `${prefix}one.mp4` }] } : { Errors: [{ Code: "AccessDenied" }] });
   expect((await call({ operation: "delete-project", projectId })).status).toBe(502);
+});
+
+it("protects retained originals and posters from individual deletion while allowing pending files to be discarded", async () => {
+  retained = [{ storage_key: `${prefix}original.mp4`, preview_storage_key: `${prefix}poster.png` }];
+  for (const key of [`${prefix}original.mp4`, `${prefix}poster.png`]) {
+    expect((await call({ operation: "delete", projectId, key })).status).toBe(409);
+  }
+  expect(mock.send).not.toHaveBeenCalled();
+  expect((await call({ operation: "delete", projectId, key: `${prefix}unused.wav` })).status).toBe(200);
+  expect(mock.send).toHaveBeenCalledTimes(1);
 });

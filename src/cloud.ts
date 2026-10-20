@@ -1,6 +1,7 @@
 import { cloudAccessToken, getCloudSession, type CloudSession } from "./cloud-session";
 import { assertEditorWrite, prepareEditorWrite, readEditorProject } from "./editor-format";
 import { withFullImagePrompts } from "./prompts";
+import { collectMediaAssets, prepareMediaProject } from "./media-composition";
 import type { ImageCandidate, ProjectData } from "./types";
 
 interface ProjectRow { id: string; owner_id: string; data: ProjectData; version: number }
@@ -75,11 +76,16 @@ export async function refreshCloudPreviews(project: ProjectData): Promise<Projec
   const context = requireContext(project);
   const next = structuredClone(project);
   const all = candidates(next);
-  const keys = all.map(candidate => candidate.media_type === "video" ? candidate.preview_storage_key : candidate.storage_key).filter((key): key is string => !!key);
+  const keys = [...all.map(candidate => candidate.media_type === "video" ? candidate.preview_storage_key : candidate.storage_key),
+    ...(next.media?.assets || []).map(asset => asset.kind === "video" ? asset.preview_storage_key : asset.kind === "image" ? asset.storage_key : undefined)].filter((key): key is string => !!key);
   const urls = await cloudFileUrls(project.id, keys, context);
   for (const candidate of all) {
     const key = candidate.media_type === "video" ? candidate.preview_storage_key : candidate.storage_key;
     if (key) candidate.preview_url = urls[key];
+  }
+  for (const asset of next.media?.assets || []) {
+    const key = asset.kind === "video" ? asset.preview_storage_key : asset.kind === "image" ? asset.storage_key : undefined;
+    if (key) asset.preview_url = urls[key];
   }
   return next;
 }
@@ -87,6 +93,8 @@ export async function refreshCloudPreviews(project: ProjectData): Promise<Projec
 function databaseError(error: { code?: string; message?: string }): Error {
   if (error.message?.includes("PROJECT_EDITOR_VERSION")) return new Error("저장된 프로젝트의 편집 형식이 더 최신입니다. 앱을 새로고침하고 최신 작업을 다시 열어 주세요.");
   if (error.message?.includes("PROJECT_SOURCE_IMMUTABLE")) return new Error("원본 제작안은 변경할 수 없습니다. 수정한 제작안은 새 프로젝트로 만들어 주세요.");
+  if (error.message?.includes("PROJECT_MEDIA_IMMUTABLE")) return new Error("보관 중인 원본 자료는 제거하거나 교체할 수 없습니다. 최신 작업을 다시 열어 주세요.");
+  if (error.message?.includes("PROJECT_MEDIA_INVALID")) return new Error("원본 자료 목록이 잘못되었습니다. 최신 작업을 다시 열어 주세요.");
   if (error.code === "PGRST202") return new Error("편집 형식 저장 설정이 필요합니다. DB의 편집 호환성 업데이트를 적용해 주세요.");
   if (error.code === "40001" || error.message?.includes("PROJECT_CONFLICT")) return new Error("다른 PC나 탭에서 이 프로젝트가 수정되었습니다. 현재 편집본을 ZIP으로 보관한 뒤 최신 작업을 다시 열어 주세요.");
   if (["PGRST205", "PGRST202", "42P01", "42883"].includes(error.code || "")) return new Error("계정 저장 설정이 아직 완료되지 않았습니다. DB 설치 안내를 확인해 주세요.");
@@ -135,12 +143,13 @@ export async function saveCloudProject(project: ProjectData): Promise<void> {
   project = prepareEditorWrite(project);
   assertEditorWrite(project);
   const context = requireContext(project);
-  const snapshot = withFullImagePrompts(structuredClone(readEditorProject(project)));
+  let snapshot = withFullImagePrompts(structuredClone(readEditorProject(project)));
   const key = versionKey(context, project.id);
   const previous = queues.get(key) || Promise.resolve();
   const task = previous.then(async () => {
     await cloudAccessToken(context);
-    assertEditorWrite(project, savedProjects.get(key));
+    snapshot = prepareMediaProject(snapshot, savedProjects.get(key));
+    assertEditorWrite(snapshot, savedProjects.get(key));
     const expected = versions.get(key) ?? snapshot.cloud_version ?? 0;
     for (const candidate of candidates(snapshot)) {
       if (!candidate.storage_key && candidate.media_type !== "video") {
@@ -155,10 +164,22 @@ export async function saveCloudProject(project: ProjectData): Promise<void> {
       }
       if (candidate.storage_key) candidate.preview_url = "";
     }
+    snapshot = prepareMediaProject(snapshot);
+    for (const asset of snapshot.media?.assets || []) {
+      if (!asset.storage_key && asset.kind === "image" && asset.inline_data) {
+        const imageKey = `${key}:${asset.id.replace(/^candidate:/, "")}`;
+        asset.storage_key = uploadedImages.get(imageKey) || await uploadCloudFile(snapshot.id, await (await fetch(asset.inline_data)).blob(), context);
+        uploadedImages.set(imageKey, asset.storage_key);
+      }
+      if (!asset.storage_key) throw new Error("보관할 원본 자료를 계정으로 옮겨 주세요.");
+      if (asset.kind === "video" && !asset.preview_storage_key && asset.preview_inline_data) asset.preview_storage_key = await uploadCloudFile(snapshot.id, await (await fetch(asset.preview_inline_data)).blob(), context);
+      delete asset.inline_data; delete asset.preview_inline_data; delete asset.preview_url;
+    }
     // Never persist temporary signed URLs or UI-only revision fields in JSONB.
     const { cloud_owner_id: _owner, cloud_version: _version, ...data } = snapshot;
-    const rpc = (snapshot.editor_version ?? 0) >= 2 ? "great100_save_timed_project" : "great100_save_editor_project";
+    const rpc = (snapshot.editor_version ?? 0) >= 3 ? "great100_save_media_project" : (snapshot.editor_version ?? 0) >= 2 ? "great100_save_timed_project" : "great100_save_editor_project";
     const result = await context.client.rpc(rpc, { p_id: snapshot.id, p_data: data, p_expected_version: expected });
+    if (result.error?.code === "PGRST202" && (snapshot.editor_version ?? 0) >= 3) throw new Error("자료 구간 저장 설정이 필요합니다. DB의 자료 구성 업데이트를 적용해 주세요.");
     if (result.error) throw databaseError(result.error);
     const row = (result.data as ProjectRow[])[0];
     if (!row) throw new Error("저장 결과를 확인하지 못했습니다.");
@@ -175,10 +196,11 @@ export async function saveCloudProject(project: ProjectData): Promise<void> {
   finally { if (queues.get(key) === task) queues.delete(key); }
 }
 
-function projectFileKeys(project: ProjectData): string[] {
+export function projectFileKeys(project: ProjectData): string[] {
   return [...new Set([
     ...candidates(project).flatMap(candidate => [candidate.storage_key, candidate.preview_storage_key]),
     project.background_music?.storage_key, ...project.scenes.map(scene => scene.narration_audio?.storage_key),
+    ...collectMediaAssets(project).flatMap(asset => [asset.storage_key, asset.preview_storage_key]),
   ].filter((value): value is string => !!value))];
 }
 

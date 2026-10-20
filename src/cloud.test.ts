@@ -46,7 +46,7 @@ it("round-trips editor metadata and unknown fields through the version-aware JSO
   const [reopened] = await listCloudProjects();
   expect(reopened).toMatchObject({ editor_version: 1, editor: draft.editor, extra: draft.extra, source: draft.source });
   expect(reopened.scenes[0].captions).toEqual(draft.scenes[0].captions);
-  await expect(saveCloudProject({ ...draft, editor_version: 3 })).rejects.toThrow("새로운 편집 형식");
+  await expect(saveCloudProject({ ...draft, editor_version: 4 })).rejects.toThrow("새로운 편집 형식");
   await expect(saveCloudProject({ ...draft, source_text: "다른 제작안" })).rejects.toThrow("원본 제작안");
   expect(rpc).toHaveBeenCalledTimes(1);
 });
@@ -98,11 +98,22 @@ it("uploads generated images once and persists object keys without expiring URLs
   expect(fetchMock.mock.calls.filter(([url]) => url === "https://private-r2.example/put")).toHaveLength(1);
   const stored = rpc.mock.calls[1][1].p_data;
   expect(stored.anchor.candidates[0]).toMatchObject({ storage_key: "alice/project/image.svg", preview_url: "" });
+  expect(rpc.mock.calls[1][0]).toBe("great100_save_media_project");
+  expect(stored).toMatchObject({ editor_version: 3, media: { assets: [expect.objectContaining({ id: "candidate:generated", storage_key: "alice/project/image.svg" })] } });
+  expect(stored.media.assets[0].inline_data).toBeUndefined(); expect(stored.media.assets[0].preview_url).toBeUndefined();
   expect(stored.cloud_owner_id).toBeUndefined(); expect(stored.cloud_version).toBeUndefined();
   expect(draft.anchor.candidates[0].preview_url).toContain("data:image/");
 });
 
-it("does not delete old media until the edited project is saved successfully", async () => {
+it("fails a media-format save when its dedicated RPC is missing instead of using an older RPC", async () => {
+  const draft = project();
+  draft.anchor.candidates = [{ id: "one", path: "image.png", storage_key: "private-original", preview_url: "https://signed", mode: "uploaded", created_at: "now" }];
+  rpc.mockResolvedValue({ data: null, error: { code: "PGRST202" } });
+  await expect(saveCloudProject(draft)).rejects.toThrow("자료 구간 저장 설정");
+  expect(rpc.mock.calls.map(call => call[0])).toEqual(["great100_save_media_project"]);
+});
+
+it("retains old originals across successful saves, failed saves and unlinks", async () => {
   const draft = project();
   draft.anchor.candidates = [{ id: "original", path: "image.png", storage_key: "original-file", preview_url: "https://signed", mode: "uploaded", created_at: "now" }];
   rpc.mockResolvedValueOnce({ data: [{ version: 1 }], error: null }).mockResolvedValueOnce({ error: { code: "40001" } });
@@ -113,7 +124,8 @@ it("does not delete old media until the edited project is saved successfully", a
   expect(fetchMock).not.toHaveBeenCalled();
   rpc.mockResolvedValueOnce({ data: [{ version: 2 }], error: null });
   await saveCloudProject(removed);
-  expect(JSON.parse(fetchMock.mock.calls[0][1]!.body as string)).toMatchObject({ operation: "delete", key: "original-file" });
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(rpc.mock.calls.at(-1)![1].p_data.media.assets).toEqual(expect.arrayContaining([expect.objectContaining({ storage_key: "original-file" })]));
 });
 
 it("batches large projects' file URLs and normalizes SVG content types", async () => {

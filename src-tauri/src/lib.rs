@@ -317,7 +317,7 @@ fn checked_music_path(dir: &Path, extension: &str) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-fn save_background_music(project_path: String, mime_type: String, data_url: String) -> Result<String, String> {
+fn save_background_music(project_path: String, mime_type: String, data_url: String, file_id: Option<String>) -> Result<String, String> {
     let extension = music_extension(&mime_type)?;
     let dir = music_dir(&project_path)?;
     let (_, encoded) = data_url.split_once(',').ok_or("음악 데이터 형식이 올바르지 않습니다.")?;
@@ -335,10 +335,19 @@ fn save_background_music(project_path: String, mime_type: String, data_url: Stri
         _ => false,
     };
     if !valid { return Err("음악 파일 내용이 올바르지 않습니다.".into()); }
-    let path = checked_music_path(&dir, extension)?;
+    if file_id.is_none() {
+        for old_extension in ["mp3", "wav", "m4a", "mp4"] {
+            assert_media_not_retained(&project_path, &checked_music_path(&dir, old_extension)?)?;
+        }
+    }
+    let path = if let Some(id) = file_id.as_deref() {
+        Uuid::parse_str(id).map_err(|_| "음악 파일 ID가 올바르지 않습니다.")?;
+        independent_media_dir(&project_path)?.join(format!("background_music_{id}.{extension}"))
+    } else { checked_music_path(&dir, extension)? };
+    if file_id.is_some() && fs::symlink_metadata(&path).is_ok() { return Err("이미 저장된 원본은 덮어쓸 수 없습니다.".into()); }
     fs::write(&path, bytes).map_err(|error| error.to_string())?;
     for old_extension in ["mp3", "wav", "m4a", "mp4"] {
-        if old_extension != extension {
+        if file_id.is_none() && old_extension != extension {
             let old = checked_music_path(&dir, old_extension)?;
             if old.is_file() { fs::remove_file(old).map_err(|error| error.to_string())?; }
         }
@@ -360,7 +369,10 @@ fn remove_background_music(project_path: String) -> Result<(), String> {
     let dir = music_dir(&project_path)?;
     for extension in ["mp3", "wav", "m4a", "mp4"] {
         let path = checked_music_path(&dir, extension)?;
-        if path.is_file() { fs::remove_file(path).map_err(|error| error.to_string())?; }
+        if path.is_file() {
+            assert_media_not_retained(&project_path, &path)?;
+            fs::remove_file(path).map_err(|error| error.to_string())?;
+        }
     }
     Ok(())
 }
@@ -374,6 +386,77 @@ fn narration_extension(mime_type: &str) -> Result<&'static str, String> {
         "audio/webm" => Ok("webm"),
         _ => Err("지원하지 않는 녹음 형식입니다.".into()),
     }
+}
+
+fn independent_media_dir(project_path: &str) -> Result<PathBuf, String> {
+    let parent = music_dir(project_path)?;
+    let dir = parent.join("media");
+    if let Ok(metadata) = fs::symlink_metadata(&dir) {
+        if !metadata.is_dir() || metadata.file_type().is_symlink() { return Err("원본 자료 폴더가 올바르지 않습니다.".into()); }
+    } else { fs::create_dir(&dir).map_err(|error| error.to_string())?; }
+    Ok(dir)
+}
+
+fn assert_media_not_retained(project_path: &str, path: &Path) -> Result<(), String> {
+    let project = safe_project_path(project_path)?;
+    let data: Value = serde_json::from_slice(&fs::read(project.join("project_data.json")).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
+    if let Some(assets) = data.pointer("/media/assets").and_then(Value::as_array) {
+        for asset in assets {
+            if let Some(original) = asset.get("path").and_then(Value::as_str) {
+                if safe_project_path(original)?.as_path() == path { return Err("보관된 원본 자료는 프로젝트를 삭제할 때 정리됩니다.".into()); }
+            }
+        }
+    }
+    Ok(())
+}
+
+// Read the registered original path, including legacy sceneNN folders. No
+// current scene number participates in locating an original file.
+fn project_media_path(project_path: &str, asset_path: &str) -> Result<PathBuf, String> {
+    let project = safe_project_path(project_path)?;
+    let path = safe_project_path(asset_path)?;
+    let relative = path.strip_prefix(&project).map_err(|_| "다른 프로젝트의 자료는 읽을 수 없습니다.")?;
+    let mut components = relative.components();
+    let folder = components.next().and_then(|part| part.as_os_str().to_str()).ok_or("원본 자료 경로가 없습니다.")?;
+    if !["01_source", "02_character", "03_images", "04_thumbnail"].contains(&folder) { return Err("원본 자료 폴더가 아닙니다.".into()); }
+    let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("");
+    if !["png", "jpg", "jpeg", "webp", "svg", "mp4", "m4a", "wav", "mp3", "webm"].contains(&extension) { return Err("원본 자료 형식이 아닙니다.".into()); }
+    let root = projects_root()?.canonicalize().map_err(|error| error.to_string())?;
+    let canonical_project = project.canonicalize().map_err(|error| error.to_string())?;
+    if !canonical_project.starts_with(&root) { return Err("프로젝트 경로가 올바르지 않습니다.".into()); }
+    let mut checked = project.clone();
+    for component in relative.components() {
+        checked.push(component);
+        if fs::symlink_metadata(&checked).map_err(|error| error.to_string())?.file_type().is_symlink() { return Err("링크된 자료는 읽을 수 없습니다.".into()); }
+    }
+    if !project.join("project_data.json").is_file() { return Err("프로젝트를 찾지 못했습니다.".into()); }
+    Ok(path)
+}
+
+#[tauri::command]
+fn read_project_media(project_path: String, asset_path: String) -> Result<String, String> {
+    let path = project_media_path(&project_path, &asset_path)?;
+    let metadata = fs::metadata(&path).map_err(|error| error.to_string())?;
+    if !metadata.is_file() || metadata.len() > 100_000_000 { return Err("원본 자료 파일이 올바르지 않습니다.".into()); }
+    Ok(STANDARD.encode(fs::read(path).map_err(|error| error.to_string())?))
+}
+
+#[tauri::command]
+fn discard_project_media(project_path: String, asset_path: String) -> Result<(), String> {
+    let project = safe_project_path(&project_path)?;
+    let dir = independent_media_dir(&project_path)?;
+    let path = safe_project_path(&asset_path)?;
+    if path.parent() != Some(dir.as_path()) { return Err("준비 중인 녹음만 정리할 수 있습니다.".into()); }
+    let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or("");
+    Uuid::parse_str(stem.strip_prefix("narration_").ok_or("녹음 파일명이 올바르지 않습니다.")?).map_err(|_| "녹음 파일 ID가 올바르지 않습니다.")?;
+    let data = fs::read_to_string(project.join("project_data.json")).map_err(|error| error.to_string())?;
+    let escaped = serde_json::to_string(&asset_path).map_err(|error| error.to_string())?;
+    if data.contains(&escaped) { return Err("저장된 원본은 정리할 수 없습니다.".into()); }
+    if let Ok(metadata) = fs::symlink_metadata(&path) {
+        if !metadata.is_file() || metadata.file_type().is_symlink() { return Err("녹음 파일 경로가 올바르지 않습니다.".into()); }
+        fs::remove_file(path).map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 fn narration_dir(project_path: &str, scene_number: u32) -> Result<PathBuf, String> {
@@ -403,9 +486,9 @@ fn checked_narration_path(dir: &Path, extension: &str, file_id: Option<&str>) ->
 }
 
 #[tauri::command]
-fn save_scene_narration(project_path: String, scene_number: u32, mime_type: String, data_url: String, file_id: Option<String>) -> Result<String, String> {
+fn save_scene_narration(project_path: String, scene_number: u32, mime_type: String, data_url: String, file_id: Option<String>, independent: Option<bool>) -> Result<String, String> {
     let extension = narration_extension(&mime_type)?;
-    let dir = narration_dir(&project_path, scene_number)?;
+    let dir = if independent.unwrap_or(false) { independent_media_dir(&project_path)? } else { narration_dir(&project_path, scene_number)? };
     let prefix = format!("data:{mime_type};base64,");
     let encoded = data_url.strip_prefix(&prefix).ok_or("녹음 데이터 형식이 올바르지 않습니다.")?;
     if encoded.len() > 40_000_004 { return Err("30MB 이하 녹음만 사용할 수 있습니다.".into()); }
@@ -419,7 +502,13 @@ fn save_scene_narration(project_path: String, scene_number: u32, mime_type: Stri
         _ => false,
     };
     if !valid { return Err("녹음 파일 내용이 올바르지 않습니다.".into()); }
+    if file_id.is_none() {
+        for old_extension in ["mp3", "wav", "m4a", "mp4", "webm"] {
+            assert_media_not_retained(&project_path, &checked_narration_path(&dir, old_extension, None)?)?;
+        }
+    }
     let path = checked_narration_path(&dir, extension, file_id.as_deref())?;
+    if file_id.is_some() && path.exists() { return Err("이미 저장된 원본은 덮어쓸 수 없습니다.".into()); }
     fs::write(&path, bytes).map_err(|error| error.to_string())?;
     for old_extension in ["mp3", "wav", "m4a", "mp4", "webm"] {
         if file_id.is_none() && old_extension != extension {
@@ -445,12 +534,18 @@ fn remove_scene_narration(project_path: String, scene_number: u32, file_id: Opti
     if let Some(id) = file_id.as_deref() {
         let extension = narration_extension(mime_type.as_deref().ok_or("녹음 형식이 없습니다.")?)?;
         let path = checked_narration_path(&dir, extension, Some(id))?;
-        if path.is_file() { fs::remove_file(path).map_err(|error| error.to_string())?; }
+        if path.is_file() {
+            assert_media_not_retained(&project_path, &path)?;
+            fs::remove_file(path).map_err(|error| error.to_string())?;
+        }
         return Ok(());
     }
     for extension in ["mp3", "wav", "m4a", "mp4", "webm"] {
         let path = checked_narration_path(&dir, extension, None)?;
-        if path.is_file() { fs::remove_file(path).map_err(|error| error.to_string())?; }
+        if path.is_file() {
+            assert_media_not_retained(&project_path, &path)?;
+            fs::remove_file(path).map_err(|error| error.to_string())?;
+        }
     }
     Ok(())
 }
@@ -484,6 +579,7 @@ fn read_scene_video(project_path: String, scene_number: u32, candidate_id: Strin
 
 #[tauri::command]
 fn delete_candidate_file(project_path: String, asset_kind: String, scene_number: Option<u32>, candidate_id: String, candidate_path: String) -> Result<(), String> {
+    assert_media_not_retained(&project_path, Path::new(&candidate_path))?;
     let project_dir = safe_project_path(&project_path)?;
     let data: Value = serde_json::from_slice(&fs::read(project_dir.join("project_data.json")).map_err(|error| error.to_string())?)
         .map_err(|error| error.to_string())?;
@@ -681,6 +777,8 @@ pub fn run() {
             remove_scene_narration,
             import_scene_video,
             read_scene_video,
+            read_project_media,
+            discard_project_media,
             delete_candidate_file
         ])
         .run(tauri::generate_context!())

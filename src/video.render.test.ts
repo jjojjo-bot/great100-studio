@@ -5,7 +5,7 @@ import { editorProject } from "../tests/fixtures/editor-project";
 
 const calls = vi.hoisted(() => ({ audioBuffers: [] as Float32Array[], audioTracks: 0, videoFrames: 0, narrationBlob: null as Blob | null }));
 
-vi.mock("./platform", () => ({ getBackgroundMusic: async () => new Blob(["music"]), getSceneNarration: async () => calls.narrationBlob }));
+vi.mock("./platform", () => ({ getBackgroundMusic: async () => new Blob(["music"]), getMediaAsset: async () => calls.narrationBlob }));
 vi.mock("mediabunny", () => ({
   BufferTarget: class { buffer: Uint8Array | null = null; },
   CanvasSource: class { add = async () => { calls.videoFrames++; }; },

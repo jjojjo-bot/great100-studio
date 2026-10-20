@@ -36,6 +36,7 @@ export interface Scene {
   motion?: ImageMotion;
   music_volume?: number;
   narration_audio?: SceneNarrationAudio;
+  composition?: SceneComposition;
   prompt: string;
   full_prompt?: string;
   prompt_history: PromptRevision[];
@@ -68,6 +69,7 @@ export interface Scene {
 }
 
 export interface SceneNarrationAudio {
+  asset_id?: string;
   id?: string;
   name: string;
   mime_type: string;
@@ -77,10 +79,63 @@ export interface SceneNarrationAudio {
 }
 
 export interface BackgroundMusic {
+  asset_id?: string;
+  id?: string;
   name: string;
   mime_type: string;
   path: string;
   storage_key?: string;
+}
+
+// Original files have project-wide identities. Their location is never inferred
+// from a scene's current display number. Unused originals remain until deletion
+// of the project, so an inverse edit can still refer to the same bytes.
+export interface MediaAsset {
+  id: string;
+  kind: "image" | "video" | "audio";
+  path: string;
+  mime_type: string;
+  duration_sec?: number;
+  storage_key?: string;
+  preview_storage_key?: string;
+  inline_data?: string;
+  preview_inline_data?: string;
+  preview_url?: string;
+  local_store?: "audio" | "media";
+  local_key?: string;
+}
+
+export interface VisualSection {
+  id: string;
+  start_sec: number;
+  end_sec: number;
+  asset_id: string;
+  source_start_sec: number;
+  source_end_sec?: number;
+  intro_asset_id?: string;
+  intro_duration_sec?: number;
+  support_asset_id?: string;
+  support_start_sec?: number;
+  motion?: ImageMotion;
+  motion_start?: number;
+  motion_end?: number;
+}
+
+export interface AudioClip {
+  id: string;
+  asset_id: string;
+  start_sec: number;
+  end_sec: number;
+  source_start_sec: number;
+  source_end_sec: number;
+}
+
+export interface SceneComposition {
+  // Identifies the legacy controls which produced this composition. Merely
+  // changing a scene number, caption or absolute time does not rebuild it.
+  source_signature: string;
+  visuals: VisualSection[];
+  narrations: AudioClip[];
 }
 
 export interface CharacterProfile {
@@ -106,6 +161,7 @@ export interface ProjectData {
   schema_version: 1 | "2.0" | "2.1";
   editor_version?: number;
   editor?: { core_scene_ids: string[] };
+  media?: { assets: MediaAsset[] };
   id: string;
   episode: number;
   person: string;

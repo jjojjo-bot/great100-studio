@@ -1,14 +1,16 @@
-import { getBackgroundMusic, getSceneNarration, getSceneVideo } from "./platform";
+import { getBackgroundMusic, getMediaAsset } from "./platform";
+import { collectMediaAssets, sceneComposition } from "./media-composition";
 import { openSceneVideo } from "./scene-video";
 import { reportForProject } from "./app-data";
 import { refreshCloudPreviews } from "./cloud";
 import { ensureAacSupport } from "./aac";
 import { ENDING_DURATION, frameTimeline, milliseconds, OPENING_DURATION, projectTimeline, segmentProgress, snapToFrame, VIDEO_FPS } from "./timeline";
-import type { CaptionBlock, ImageCandidate, ImageMotion, ProjectData, Scene } from "./types";
+import type { AudioClip, CaptionBlock, ImageMotion, ProjectData, Scene } from "./types";
 
 export const VIDEO_WIDTH = 1280;
 export const VIDEO_HEIGHT = 720;
 export { OPENING_DURATION, VIDEO_FPS } from "./timeline";
+export { resolveVideoIntroImage, sceneTiming } from "./media-composition";
 
 export interface VideoSegment {
   title: string;
@@ -18,6 +20,8 @@ export interface VideoSegment {
   emphasisSubtitle?: string;
   imageUrl?: string;
   videoCandidateId?: string;
+  videoAssetId?: string;
+  narrationClips?: AudioClip[];
   videoIntroDuration?: number;
   videoTrimStart?: number;
   videoTrimEnd?: number;
@@ -42,49 +46,60 @@ export function sceneMusicVolume(volume: number | undefined): number {
   return volume === undefined ? 45 : Number.isFinite(volume) ? Math.max(0, Math.min(100, volume)) : 45;
 }
 
-export function resolveVideoIntroImage(scene: Scene): ImageCandidate | undefined {
-  if (scene.video_intro_candidate_id === null) return undefined;
-  if (scene.video_intro_candidate_id) return scene.candidates.find((candidate) => candidate.id === scene.video_intro_candidate_id && candidate.media_type !== "video");
-  return scene.candidates.filter((candidate) => candidate.mode === "uploaded" && candidate.media_type !== "video").at(-1);
-}
-
-export function sceneTiming(scene: Scene, videoDuration?: number, hasIntro = false, hasSupport = false) {
-  const duration = scene.duration ?? 10;
-  const intro = hasIntro ? Math.max(0, Math.min(duration - 0.1, scene.video_intro_duration_sec ?? Math.min(1.5, duration / 4))) : 0;
-  const trimStart = Math.max(0, Math.min(Math.max(0, (videoDuration ?? duration) - 0.1), scene.video_trim_start_sec ?? 0));
-  const trimEnd = Math.max(trimStart + 0.1, Math.min(videoDuration ?? duration, scene.video_trim_end_sec ?? (videoDuration ?? duration)));
-  const supportStart = hasSupport ? Math.max(0, Math.min(duration - 0.1, scene.support_start_sec ?? duration / 2)) : undefined;
-  return { intro, trimStart, trimEnd, supportStart };
-}
-
 export function buildSceneSegment(project: ProjectData, scene: Scene, index: number): VideoSegment {
-  const image = scene.candidates.find((candidate) => candidate.id === scene.selected_candidate_id);
-  if (!image) throw new Error(`Scene ${String(scene.number).padStart(2, "0")}의 이미지 또는 동영상을 선택해 주세요.`);
-  const support = scene.support_candidates?.find((candidate) => candidate.id === scene.support_selected_candidate_id);
-  if (scene.support_selected_candidate_id && !support) throw new Error(`Scene ${String(scene.number).padStart(2, "0")}의 선택한 보조 이미지를 찾지 못했습니다.`);
+  return buildSceneSegments(project, scene, index)[0];
+}
+
+export function buildSceneSegments(project: ProjectData, scene: Scene, index: number): VideoSegment[] {
+  const composition = sceneComposition(scene);
+  if (!composition.visuals.length) throw new Error(`Scene ${String(scene.number).padStart(2, "0")}의 이미지 또는 동영상을 선택해 주세요.`);
+  if (scene.support_selected_candidate_id && !scene.support_candidates?.some(candidate => candidate.id === scene.support_selected_candidate_id)) throw new Error(`Scene ${String(scene.number).padStart(2, "0")}의 선택한 보조 이미지를 찾지 못했습니다.`);
   const originalDuration = scene.duration ?? 10;
   if (!Number.isFinite(originalDuration) || originalDuration < 1 || originalDuration > 120) throw new Error(`Scene ${scene.number}의 길이는 1~120초여야 합니다.`);
   const entry = projectTimeline(project).scenes.find(item => item.scene.id === scene.id)!;
-  const duration = entry.duration;
-  const boundary = (seconds: number) => Math.max(0, Math.min(duration, snapToFrame(seconds)));
-  const intro = image.media_type === "video" ? resolveVideoIntroImage(scene) : undefined;
-  const timing = sceneTiming(scene, image.media_type === "video" ? image.duration_sec : undefined, !!intro, !!support);
-  return { title: scene.title, sceneId: scene.id, caption: project.schema_version === "2.1" ? scene.narration || "" : scene.caption ?? scene.title,
-    timedCaptions: project.schema_version === "2.1" ? scene.captions?.map((block) => ({ ...block, start_sec: boundary((milliseconds(block.start_sec) - entry.sourceStartMs) / 1000), end_sec: boundary((milliseconds(block.end_sec) - entry.sourceStartMs) / 1000) })) : undefined,
+  const assets = new Map(collectMediaAssets(project).map(asset => [asset.id, asset]));
+  const imageUrl = (id?: string) => {
+    if (!id) return undefined;
+    const asset = assets.get(id);
+    if (!asset) throw new Error(`Scene ${scene.number}의 원본 자료 연결을 찾지 못했습니다.`);
+    return asset.preview_url || asset.inline_data || asset.preview_inline_data || [...scene.candidates, ...(scene.support_candidates || [])].find(candidate => `candidate:${candidate.id}` === id)?.preview_url;
+  };
+  const sceneBoundary = (seconds: number) => Math.max(0, Math.min(entry.duration, (Math.round((entry.startMs + milliseconds(seconds)) * VIDEO_FPS / 1000) - entry.startFrame) / VIDEO_FPS));
+  return composition.visuals.map(section => {
+    const image = assets.get(section.asset_id);
+    if (!image) throw new Error(`Scene ${scene.number}의 원본 자료 연결을 찾지 못했습니다.`);
+    const start = sceneBoundary(section.start_sec); const end = sceneBoundary(section.end_sec); const duration = end - start;
+    if (duration < 1 / VIDEO_FPS - 0.000001) throw new Error("화면 구간은 한 프레임 이상이어야 합니다.");
+    const boundary = (seconds: number) => Math.max(0, Math.min(duration, sceneBoundary(section.start_sec + seconds) - start));
+    const introDuration = section.intro_asset_id ? Math.min(duration - 1 / VIDEO_FPS, boundary(section.intro_duration_sec ?? 0)) : undefined;
+    const captions = project.schema_version === "2.1" ? scene.captions?.map(block => ({ ...block,
+      start_sec: Math.max(0, sceneBoundary((milliseconds(block.start_sec) - entry.sourceStartMs) / 1000) - start),
+      end_sec: Math.min(duration, sceneBoundary((milliseconds(block.end_sec) - entry.sourceStartMs) / 1000) - start) })).filter(block => block.end_sec > block.start_sec) : undefined;
+    const narrationClips = composition.narrations.filter(clip => clip.end_sec > section.start_sec && clip.start_sec < section.end_sec).map(clip => {
+      const rawStart = Math.max(clip.start_sec, section.start_sec); const rawEnd = Math.min(clip.end_sec, section.end_sec);
+      const clipStart = Math.max(0, rawStart - section.start_sec); const clipEnd = Math.min(duration, rawEnd - section.start_sec);
+      return { ...clip, start_sec: clipStart, end_sec: clipEnd, source_start_sec: clip.source_start_sec + rawStart - clip.start_sec,
+        source_end_sec: clip.source_start_sec + rawStart - clip.start_sec + clipEnd - clipStart };
+    }).filter(clip => clip.end_sec > clip.start_sec);
+    return { title: scene.title, sceneId: scene.id, caption: project.schema_version === "2.1" ? scene.narration || "" : scene.caption ?? scene.title,
+    timedCaptions: captions,
     emphasisSubtitle: project.schema_version === "2.1" ? scene.subtitle : undefined,
-    imageUrl: intro?.preview_url || image.preview_url, videoCandidateId: image.media_type === "video" ? image.id : undefined,
-    videoIntroDuration: intro ? Math.min(duration - 1 / VIDEO_FPS, boundary(timing.intro)) : undefined,
-    videoTrimStart: image.media_type === "video" ? timing.trimStart : undefined,
-    videoTrimEnd: image.media_type === "video" ? timing.trimEnd : undefined,
-    supportImageUrl: support?.preview_url, supportStartsAt: timing.supportStart === undefined ? undefined : boundary(timing.supportStart),
-    duration, motion: resolveImageMotion(scene.motion, index), musicVolume: sceneMusicVolume(scene.music_volume) };
+    imageUrl: imageUrl(section.intro_asset_id || section.asset_id), videoCandidateId: image.kind === "video" ? image.id.replace(/^candidate:/, "") : undefined,
+    videoAssetId: image.kind === "video" ? image.id : undefined, narrationClips,
+    videoIntroDuration: introDuration,
+    videoTrimStart: image.kind === "video" ? section.source_start_sec : undefined,
+    videoTrimEnd: image.kind === "video" ? section.source_end_sec : undefined,
+    supportImageUrl: imageUrl(section.support_asset_id), supportStartsAt: section.support_start_sec === undefined ? undefined : boundary(section.support_start_sec),
+    duration, motion: resolveImageMotion(section.motion, index), motionStart: section.motion_start, motionEnd: section.motion_end,
+    musicVolume: sceneMusicVolume(scene.music_volume) };
+  });
 }
 
 export function buildVideoPlan(project: ProjectData): VideoSegment[] {
   if (!project.scenes.length) throw new Error("영상으로 만들 Scene이 없습니다.");
   const errors = reportForProject(project).errors;
   if (errors.length) throw new Error(errors[0]);
-  const scenes: VideoSegment[] = [...project.scenes].sort((a, b) => a.number - b.number).map((scene, index) => buildSceneSegment(project, scene, index));
+  const scenes: VideoSegment[] = [...project.scenes].sort((a, b) => a.number - b.number).flatMap((scene, index) => buildSceneSegments(project, scene, index));
   const thumbnail = project.thumbnail.candidates.find((candidate) => candidate.id === project.thumbnail.selected_candidate_id);
   if (project.thumbnail.selected_candidate_id && !thumbnail) throw new Error("선택한 썸네일 이미지를 찾지 못했습니다.");
   const hasEnding = !!project.ending_message.trim() || !!thumbnail;
@@ -130,7 +145,7 @@ export function musicGainAtTime(sections: MusicSection[], time: number): number 
 }
 
 type DecodedAudio = { sampleRate: number; duration: number; channels: Float32Array[] };
-type NarrationClip = { start: number; end: number; audio: DecodedAudio };
+type NarrationClip = { start: number; end: number; sourceStart: number; audio: DecodedAudio };
 
 function decodedAudio(buffer: AudioBuffer): DecodedAudio {
   return { sampleRate: buffer.sampleRate, duration: buffer.duration || buffer.length / buffer.sampleRate,
@@ -158,14 +173,14 @@ function makeAudioChunk(context: AudioContext, music: DecodedAudio | null, narra
     while (narrationIndex < narrations.length && time >= narrations[narrationIndex].end) narrationIndex++;
     const clip = narrations[narrationIndex];
     const voiceTime = clip ? time - clip.start : -1;
-    const voiceDuration = clip ? Math.min(clip.audio.duration, clip.end - clip.start) : 0;
+    const voiceDuration = clip ? Math.min(clip.audio.duration - clip.sourceStart, clip.end - clip.start) : 0;
     const voiceActive = clip && voiceTime >= 0 && voiceTime < voiceDuration;
     const voiceFade = voiceActive ? Math.min(1, voiceTime / 0.04, (voiceDuration - voiceTime) / 0.04) : 0;
     const duck = voiceActive ? Math.min(1, voiceTime / 0.18, (voiceDuration - voiceTime) / 0.18) : 0;
     const musicGain = music ? gainAtTime(timeline, time) * (1 - 0.78 * duck) : 0;
     for (let channel = 0; channel < channelCount; channel++) {
       const background = music ? audioSample(music, channel, time, true) * musicGain : 0;
-      const voice = voiceActive ? audioSample(clip.audio, channel, voiceTime) * voiceFade : 0;
+      const voice = voiceActive ? audioSample(clip.audio, channel, clip.sourceStart + voiceTime) * voiceFade : 0;
       targets[channel][index] = Math.max(-1, Math.min(1, background + voice));
     }
   }
@@ -378,7 +393,7 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
   const narrations: NarrationClip[] = [];
   let audioSampleRate = 0;
   let audioChannels = 0;
-  if (project.background_music || project.scenes.some((scene) => scene.narration_audio)) {
+  if (project.background_music || plan.some(segment => segment.narrationClips?.length)) {
     audioContext = new AudioContext();
     try {
       if (project.background_music) {
@@ -389,17 +404,23 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
           : await audioContext.decodeAudioData(await musicBlob.arrayBuffer());
         music = decodedAudio(buffer);
       }
+      const audioCache = new Map<string, DecodedAudio>();
+      const assets = new Map(collectMediaAssets(project).map(asset => [asset.id, asset]));
       for (const [index, segment] of plan.entries()) {
-        const scene = segment.sceneId ? project.scenes.find((item) => item.id === segment.sceneId) : undefined;
-        if (scene?.narration_audio) {
-          const blob = await getSceneNarration(project, scene);
-          if (!blob) throw new Error(`Scene ${scene.number} 녹음 파일을 찾지 못했습니다. 다시 녹음하거나 업로드해 주세요.`);
-          const buffer = ["audio/mp4", "video/mp4"].includes(scene.narration_audio.mime_type)
+        for (const clip of segment.narrationClips || []) {
+          let audio = audioCache.get(clip.asset_id);
+          const asset = assets.get(clip.asset_id);
+          if (!asset) throw new Error(`${segment.title} 녹음 원본 연결을 찾지 못했습니다.`);
+          if (!audio) {
+          const blob = await getMediaAsset(project, asset);
+          if (!blob) throw new Error(`${segment.title} 녹음 파일을 찾지 못했습니다. 다시 녹음하거나 업로드해 주세요.`);
+          const buffer = ["audio/mp4", "video/mp4"].includes(asset.mime_type)
             ? await (await import("./music")).decodeMpeg4Audio(blob, audioContext)
             : await audioContext.decodeAudioData(await blob.arrayBuffer());
-          const audio = decodedAudio(buffer);
-          if (audio.duration > segment.duration + 0.15) throw new Error(`Scene ${scene.number} 녹음이 장면 길이보다 깁니다. 다시 녹음해 주세요.`);
-          narrations.push({ start: ranges[index].start, end: ranges[index].end, audio });
+          audio = decodedAudio(buffer); audioCache.set(clip.asset_id, audio);
+          }
+          if (clip.source_end_sec > audio.duration + 0.05) throw new Error(`${segment.title} 녹음 원본이 지정한 구간보다 짧습니다.`);
+          narrations.push({ start: ranges[index].start + clip.start_sec, end: ranges[index].start + clip.end_sec, sourceStart: clip.source_start_sec, audio });
         }
       }
     }
@@ -445,17 +466,14 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
       }
       let video: Awaited<ReturnType<typeof openSceneVideo>> | null = null;
       let videoFrames: AsyncIterator<{ canvas: HTMLCanvasElement | OffscreenCanvas } | null> | null = null;
-      const introFrames = segment.videoCandidateId && segment.videoIntroDuration
+      const introFrames = segment.videoAssetId && segment.videoIntroDuration
         ? Math.min(frameCounts[segmentIndex] - 1, Math.max(1, Math.round(segment.videoIntroDuration * VIDEO_FPS))) : 0;
       try {
-        if (segment.videoCandidateId) {
-          const scene = project.scenes.find((item) => item.id === segment.sceneId);
-          const candidate = scene?.candidates.find((item) => item.id === segment.videoCandidateId);
-          if (!scene || !candidate) throw new Error(`${segment.title}의 동영상 후보를 찾지 못했습니다.`);
-          const blob = await getSceneVideo(project, scene, candidate);
+        if (segment.videoAssetId) {
+          const blob = await getMediaAsset(project, segment.videoAssetId);
           if (!blob) throw new Error(`${segment.title}의 동영상 파일을 찾지 못했습니다. 다시 업로드해 주세요.`);
           video = await openSceneVideo(blob);
-          const timestamps = Array.from({ length: frameCounts[segmentIndex] - introFrames }, (_, index) => video!.firstTimestamp + Math.min((segment.videoTrimStart ?? 0) + index / VIDEO_FPS, segment.videoTrimEnd ?? video!.duration, video!.duration - 0.001));
+          const timestamps = Array.from({ length: frameCounts[segmentIndex] - introFrames }, (_, index) => video!.firstTimestamp + Math.min((segment.videoTrimStart ?? 0) + index / VIDEO_FPS, (segment.videoTrimEnd ?? video!.duration) - 0.001, video!.duration - 0.001));
           videoFrames = video.sink.canvasesAtTimestamps(timestamps)[Symbol.asyncIterator]();
         }
       for (let localFrame = 0; localFrame < frameCounts[segmentIndex]; localFrame++) {

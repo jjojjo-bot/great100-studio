@@ -58,7 +58,7 @@ it("undoes a continuous text edit, preserves native text shortcuts, and saves re
 });
 
 it("keeps an unsupported future-format project on the dashboard without mounting its editor", async () => {
-  project.editor_version = 3;
+  project.editor_version = 4;
   await open();
   expect(screen.queryByLabelText("장면 1 영상 자막")).toBeNull();
   expect(screen.getByText(/더 새로운 편집 형식/)).toBeTruthy();

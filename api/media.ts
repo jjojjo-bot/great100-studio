@@ -36,7 +36,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     }
     if (!configured) return response.status(503).json({ error: "파일 저장소 연결을 준비하고 있습니다." });
     if (typeof projectId !== "string" || !uuid.test(projectId)) return response.status(400).json({ error: "프로젝트를 확인해 주세요." });
-    const { data: project, error: projectError } = await database.from("great100_projects").select("id").eq("id", projectId).eq("owner_id", user.id).maybeSingle();
+    const { data: project, error: projectError } = await database.from("great100_projects").select("id,data").eq("id", projectId).eq("owner_id", user.id).maybeSingle();
     if (projectError) return response.status(503).json({ error: "프로젝트 저장소에 연결하지 못했습니다." });
     if (!project) return response.status(404).json({ error: "접근할 수 없는 프로젝트입니다." });
     const prefix = `${user.id}/${projectId}/`;
@@ -60,6 +60,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
     }
     if (operation === "delete") {
       if (!validKey(request.body.key)) return response.status(400).json({ error: "파일 경로를 확인해 주세요." });
+      const retained = project.data?.media?.assets;
+      if (Array.isArray(retained) && retained.some((asset: { storage_key?: string; preview_storage_key?: string }) => asset.storage_key === request.body.key || asset.preview_storage_key === request.body.key)) {
+        return response.status(409).json({ error: "프로젝트에 보관된 원본 자료는 프로젝트를 삭제할 때 함께 정리됩니다." });
+      }
       await storage.send(new DeleteObjectCommand({ Bucket: bucket, Key: request.body.key }));
       return response.status(200).json({ deleted: true });
     }

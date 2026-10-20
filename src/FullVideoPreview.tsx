@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getBackgroundMusic, getSceneNarration, getSceneVideo } from "./platform";
-import { activeTimedCaption, buildSceneSegment, buildVideoPlan, captionParts, drawFrame, musicGainAtTime, VIDEO_HEIGHT, VIDEO_WIDTH, type VideoSegment } from "./video";
+import { getBackgroundMusic, getMediaAsset } from "./platform";
+import { activeTimedCaption, buildSceneSegments, buildVideoPlan, captionParts, drawFrame, musicGainAtTime, VIDEO_HEIGHT, VIDEO_WIDTH, type VideoSegment } from "./video";
 import type { ProjectData } from "./types";
 import { frameTimeline, playbackPosition, segmentProgress, snapToFrame } from "./timeline";
 
-type Media = { image: HTMLImageElement | null; support: HTMLImageElement | null; video: HTMLVideoElement | null; narration: HTMLAudioElement | null };
+type Media = { image: HTMLImageElement | null; support: HTMLImageElement | null; video: HTMLVideoElement | null; narrations: HTMLAudioElement[] };
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const loadImage = async (url?: string) => {
   if (!url) return null;
@@ -19,14 +19,12 @@ export function FullVideoPreview({ project, sceneId, seekRequest, onPositionChan
   const planResult = useMemo(() => { try {
     const scene = sceneId ? project.scenes.find((item) => item.id === sceneId) : undefined;
     if (sceneId && !scene) throw new Error("장면을 찾지 못했습니다.");
-    return { plan: scene ? [buildSceneSegment(project, scene, Math.max(0, scene.number - 1))] : buildVideoPlan(project), error: "" };
+    return { plan: scene ? buildSceneSegments(project, scene, Math.max(0, scene.number - 1)) : buildVideoPlan(project), error: "" };
   } catch (error) { return { plan: [] as VideoSegment[], error: String(error) }; } }, [project, sceneId]);
   const plan = planResult.plan;
   const total = frameTimeline(plan.map(segment => segment.duration), true).at(-1)?.end ?? 0;
-  const mediaKey = useMemo(() => JSON.stringify({ project: project.id, sceneId, music: project.background_music?.path, assets: plan.map((segment) => {
-    const scene = project.scenes.find((item) => item.id === segment.sceneId);
-    return [segment.imageUrl, segment.supportImageUrl, segment.videoCandidateId, scene?.narration_audio?.path, scene?.narration_audio?.storage_key];
-  }) }), [project, sceneId, plan]);
+  const mediaKey = useMemo(() => JSON.stringify({ project: project.id, sceneId, music: project.background_music,
+    assets: plan.map(segment => [segment.imageUrl, segment.supportImageUrl, segment.videoAssetId, segment.narrationClips?.map(clip => [clip.id, clip.asset_id])]) }), [project, sceneId, plan]);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const mediaRef = useRef<Media[]>([]);
   const musicRef = useRef<HTMLAudioElement | null>(null);
@@ -73,16 +71,17 @@ export function FullVideoPreview({ project, sceneId, seekRequest, onPositionChan
     const motionProgress = (segment.motionStart ?? 0) + progress * ((segment.motionEnd ?? 1) - (segment.motionStart ?? 0));
     const introOpacity = media.video && media.image && seconds >= (segment.videoIntroDuration ?? 0) ? clamp(1 - (seconds - (segment.videoIntroDuration ?? 0)) / snapToFrame(0.3), 0, 1) : 0;
     drawFrame(ctx, visual, caption, motionProgress, project.person, segment.motion, segment.emphasisSubtitle && seconds < 3 ? segment.emphasisSubtitle : "", seconds, media.support, supportOpacity, supportProgress, segment.opening ? clamp((1 - progress) * segment.duration / 0.8, 0, 1) : 0, !!segment.ending, index === 1 ? clamp(seconds / 0.5, 0, 1) : 1, introOpacity ? media.image : null, introOpacity);
-    mediaRef.current.forEach((item, itemIndex) => {
-      if (!item.narration) return;
-      if (itemIndex === index && seconds < item.narration.duration && playingRef.current) {
-        if (Math.abs(item.narration.currentTime - seconds) > 0.15) item.narration.currentTime = seconds;
-        if (item.narration.paused) void item.narration.play().catch(() => {});
-      } else item.narration.pause();
-    });
+    mediaRef.current.forEach((item, itemIndex) => item.narrations.forEach((audio, clipIndex) => {
+      const clip = segment.narrationClips?.[clipIndex];
+      if (itemIndex === index && clip && seconds >= clip.start_sec && seconds < clip.end_sec && playingRef.current) {
+        const sourceTime = clip.source_start_sec + seconds - clip.start_sec;
+        if (Math.abs(audio.currentTime - sourceTime) > 0.15) audio.currentTime = sourceTime;
+        if (audio.paused) void audio.play().catch(() => {});
+      } else audio.pause();
+    }));
     const music = musicRef.current;
     if (music) {
-      const narrationActive = !!media.narration && seconds < media.narration.duration;
+      const narrationActive = segment.narrationClips?.some(clip => seconds >= clip.start_sec && seconds < clip.end_sec);
       music.volume = clamp(musicGainAtTime(plan, time) * (narrationActive ? 0.28 : 1), 0, 1);
       if (playingRef.current && music.paused) void music.play().catch(() => {});
     }
@@ -101,24 +100,22 @@ export function FullVideoPreview({ project, sceneId, seekRequest, onPositionChan
         const image = await loadImage(segment.imageUrl);
         const support = await loadImage(segment.supportImageUrl);
         let video: HTMLVideoElement | null = null;
-        let narration: HTMLAudioElement | null = null;
-        const scene = project.scenes.find((item) => item.id === segment.sceneId);
-        if (segment.videoCandidateId && scene) {
-          const candidate = scene.candidates.find((item) => item.id === segment.videoCandidateId);
-          const blob = candidate && await getSceneVideo(project, scene, candidate);
+        const narrations: HTMLAudioElement[] = [];
+        if (segment.videoAssetId) {
+          const blob = await getMediaAsset(project, segment.videoAssetId);
           if (!blob) throw new Error(`${segment.title} 동영상 파일을 찾지 못했습니다.`);
           const url = URL.createObjectURL(blob); urls.push(url);
           video = document.createElement("video"); video.src = url; video.muted = true; video.preload = "auto"; video.playsInline = true;
           await new Promise<void>((resolve, reject) => { video!.onloadeddata = () => resolve(); video!.onerror = () => reject(new Error("동영상을 읽지 못했습니다.")); });
           video.onseeked = () => { if (!cancelled) renderRef.current(positionRef.current); };
         }
-        if (scene?.narration_audio) {
-          const blob = await getSceneNarration(project, scene);
+        for (const clip of segment.narrationClips || []) {
+          const blob = await getMediaAsset(project, clip.asset_id);
           if (!blob) throw new Error(`${segment.title} 녹음 파일을 찾지 못했습니다.`);
           const url = URL.createObjectURL(blob); urls.push(url);
-          narration = new Audio(url); narration.preload = "auto";
+          const audio = new Audio(url); audio.preload = "auto"; narrations.push(audio);
         }
-        media.push({ image, support, video, narration });
+        media.push({ image, support, video, narrations });
       }
       if (project.background_music) {
         const blob = await getBackgroundMusic(project);
@@ -126,7 +123,7 @@ export function FullVideoPreview({ project, sceneId, seekRequest, onPositionChan
         const url = URL.createObjectURL(blob); urls.push(url);
         musicRef.current = new Audio(url); musicRef.current.loop = true;
       }
-      if (cancelled) { media.forEach((item) => { item.video?.pause(); item.narration?.pause(); }); return; }
+      if (cancelled) { media.forEach((item) => { item.video?.pause(); item.narrations.forEach(audio => audio.pause()); }); return; }
       mediaRef.current = media;
       setReady(true);
       requestAnimationFrame(() => renderRef.current(0));
@@ -134,7 +131,7 @@ export function FullVideoPreview({ project, sceneId, seekRequest, onPositionChan
     void load().catch((cause) => { if (!cancelled) setError(String(cause)); });
     return () => {
       cancelled = true; playingRef.current = false; cancelAnimationFrame(rafRef.current);
-      mediaRef.current.forEach((item) => { item.video?.pause(); item.narration?.pause(); item.video?.removeAttribute("src"); });
+      mediaRef.current.forEach((item) => { item.video?.pause(); item.narrations.forEach(audio => { audio.pause(); audio.removeAttribute("src"); }); item.video?.removeAttribute("src"); });
       mediaRef.current = []; musicRef.current?.pause(); musicRef.current = null;
       urls.forEach((url) => URL.revokeObjectURL(url));
     };
@@ -144,11 +141,11 @@ export function FullVideoPreview({ project, sceneId, seekRequest, onPositionChan
 
   useEffect(() => { if (ready && plan.length) renderRef.current(positionRef.current); }, [plan, ready]);
 
-  const timingKey = plan.map(segment => segment.duration).join(",");
+  const timingKey = JSON.stringify(plan.map(segment => [segment.duration, segment.narrationClips, segment.videoTrimStart, segment.videoTrimEnd]));
   useEffect(() => {
     playingRef.current = false; setPlaying(false); cancelAnimationFrame(rafRef.current);
     musicRef.current?.pause();
-    mediaRef.current.forEach(item => { item.narration?.pause(); item.video?.pause(); });
+    mediaRef.current.forEach(item => { item.narrations.forEach(audio => audio.pause()); item.video?.pause(); });
     const next = Math.min(positionRef.current, total);
     positionRef.current = next; setPosition(next); reportPosition(next, true);
     if (ready && plan.length) renderRef.current(next);
@@ -163,7 +160,7 @@ export function FullVideoPreview({ project, sceneId, seekRequest, onPositionChan
     renderRef.current(positionRef.current);
   };
   const toggle = () => {
-    if (playingRef.current) { playingRef.current = false; setPlaying(false); musicRef.current?.pause(); mediaRef.current.forEach((item) => { item.narration?.pause(); item.video?.pause(); }); cancelAnimationFrame(rafRef.current); return; }
+    if (playingRef.current) { playingRef.current = false; setPlaying(false); musicRef.current?.pause(); mediaRef.current.forEach((item) => { item.narrations.forEach(audio => audio.pause()); item.video?.pause(); }); cancelAnimationFrame(rafRef.current); return; }
     if (positionRef.current >= total) seek(0);
     playingRef.current = true; setPlaying(true);
     playbackStartRef.current = performance.now() - positionRef.current * 1000;
@@ -172,7 +169,7 @@ export function FullVideoPreview({ project, sceneId, seekRequest, onPositionChan
       positionRef.current = next; setPosition(next); renderRef.current(next);
       reportPosition(next, next === total);
       if (next < total && playingRef.current) rafRef.current = requestAnimationFrame(tick);
-      else { playingRef.current = false; setPlaying(false); musicRef.current?.pause(); mediaRef.current.forEach((item) => { item.narration?.pause(); item.video?.pause(); }); }
+      else { playingRef.current = false; setPlaying(false); musicRef.current?.pause(); mediaRef.current.forEach((item) => { item.narrations.forEach(audio => audio.pause()); item.video?.pause(); }); }
     };
     rafRef.current = requestAnimationFrame(tick);
   };

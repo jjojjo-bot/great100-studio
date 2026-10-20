@@ -7,7 +7,7 @@ const calls = vi.hoisted(() => ({ timestamps: [] as number[], decodedDraws: 0, i
 vi.mock("./platform", () => ({
   getBackgroundMusic: async () => null,
   getSceneNarration: async () => null,
-  getSceneVideo: async () => new Blob(["clip"], { type: "video/mp4" }),
+  getMediaAsset: async () => new Blob(["clip"], { type: "video/mp4" }),
 }));
 vi.mock("./scene-video", () => ({
   openSceneVideo: async () => ({
@@ -64,7 +64,7 @@ describe("장면 MP4 렌더링", () => {
     expect(calls.decodedDraws).toBe(30);
     expect(calls.timestamps).toHaveLength(30);
     expect(calls.timestamps[0]).toBeCloseTo(0.2);
-    expect(calls.timestamps.at(-1)).toBeCloseTo(0.6);
+    expect(calls.timestamps.at(-1)).toBeCloseTo(0.599);
     expect(calls.disposed).toBe(1);
   });
 

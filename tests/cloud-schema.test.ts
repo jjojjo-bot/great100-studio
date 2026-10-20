@@ -9,6 +9,7 @@ const project = "33333333-3333-4333-8333-333333333333";
 const migration = readFileSync(new URL("../supabase/migrations/202610190001_cloud_projects.sql", import.meta.url), "utf8");
 const editorMigration = readFileSync(new URL("../supabase/migrations/202610200001_editor_compatibility.sql", import.meta.url), "utf8");
 const timingMigration = readFileSync(new URL("../supabase/migrations/202610200002_timeline_editing.sql", import.meta.url), "utf8");
+const mediaMigration = readFileSync(new URL("../supabase/migrations/202610200003_media_composition.sql", import.meta.url), "utf8");
 
 async function asUser(id: string) {
   await db.exec("reset role");
@@ -32,6 +33,8 @@ beforeAll(async () => {
   await db.exec(editorMigration);
   await db.exec(timingMigration);
   await db.exec(timingMigration);
+  await db.exec(mediaMigration);
+  await db.exec(mediaMigration);
 }, 30_000);
 afterAll(async () => { await db.close(); });
 
@@ -105,4 +108,32 @@ it("retains the pre-timing snapshot and denies editor-v1 writes after the v2 upg
   await asUser(bob);
   expect((await db.query("select * from public.great100_timing_backups")).rows).toEqual([]);
   await expect(db.query("delete from public.great100_timing_backups")).rejects.toThrow();
+});
+
+it("backs up the media transition, retains originals through unlinks, and rejects old writers and locator replacements", async () => {
+  await asUser(alice);
+  const id = "66666666-6666-4666-8666-666666666666";
+  const original = { id, episode: 5, editor_version: 2, source_text: "원본", source: { keep: true } };
+  await db.query("select * from public.great100_save_timed_project($1,$2::jsonb,0)", [id, JSON.stringify(original)]);
+  const asset = { id: "voice", kind: "audio", path: "original.wav", mime_type: "audio/wav", duration_sec: 3, storage_key: "private-voice", local_store: "audio", local_key: "original-key", extra: { keep: true } };
+  const edited = { ...original, editor_version: 3, media: { assets: [asset] }, scenes: [{ id: "scene", composition: { visuals: [], narrations: [{ asset_id: "voice", source_start_sec: 1, source_end_sec: 2, start_sec: 0, end_sec: 1 }] } }] };
+  await db.query("select * from public.great100_save_media_project($1,$2::jsonb,1)", [id, JSON.stringify(edited)]);
+  expect((await db.query<{ data: unknown }>("select data from public.great100_media_backups where project_id=$1", [id])).rows).toEqual([{ data: original }]);
+  await expect(db.query("select * from public.great100_save_timed_project($1,$2::jsonb,2)", [id, JSON.stringify(original)])).rejects.toThrow("PROJECT_EDITOR_VERSION_DOWNGRADE");
+  await expect(db.query("select * from public.great100_save_timed_project($1,$2::jsonb,2)", [id, JSON.stringify(edited)])).rejects.toThrow("PROJECT_EDITOR_VERSION_UNSUPPORTED");
+  for (const assets of [[], [{ ...asset, path: "replacement.wav" }], [{ ...asset, storage_key: "replacement-key" }], [{ ...asset, local_key: "replacement-local" }]]) {
+    await expect(db.query("select * from public.great100_save_media_project($1,$2::jsonb,2)", [id, JSON.stringify({ ...edited, media: { assets } })])).rejects.toThrow("PROJECT_MEDIA_IMMUTABLE");
+  }
+  await expect(db.query("update public.great100_projects set data=$2::jsonb where id=$1", [id, JSON.stringify({ ...edited, media: { assets: [] } })])).rejects.toThrow("PROJECT_MEDIA_IMMUTABLE");
+  const unlinked = { ...edited, scenes: [] };
+  await db.query("select * from public.great100_save_media_project($1,$2::jsonb,2)", [id, JSON.stringify(unlinked)]);
+  expect((await db.query<{ data: unknown }>("select data from public.great100_projects where id=$1", [id])).rows).toEqual([{ data: unlinked }]);
+  await expect(db.query("select * from public.great100_save_media_project($1,$2::jsonb,2)", [id, JSON.stringify(unlinked)])).rejects.toThrow("PROJECT_CONFLICT");
+  await expect(db.query("select * from public.great100_save_media_project($1,$2::jsonb,3)", [id, JSON.stringify({ ...unlinked, source_text: "교체" })])).rejects.toThrow("PROJECT_SOURCE_IMMUTABLE");
+  await asUser(bob);
+  expect((await db.query("select * from public.great100_media_backups")).rows).toEqual([]);
+  await expect(db.query("delete from public.great100_media_backups")).rejects.toThrow();
+  await asUser(alice);
+  await db.query("delete from public.great100_projects where id=$1", [id]);
+  expect((await db.query("select * from public.great100_media_backups where project_id=$1", [id])).rows).toEqual([]);
 });

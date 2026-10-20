@@ -100,7 +100,7 @@ export function proposeNarrationTiming(project: ProjectData, sceneId: string, na
     validateCaptions(captions, startMs, nextDuration);
     changes.set(entry.scene.id, { ...entry.scene, duration: nextDuration / 1000, start_sec: startMs / 1000, end_sec: (startMs + nextDuration) / 1000, captions });
   }
-  const next = { ...project, editor_version: 2, scenes: project.scenes.map(scene => changes.get(scene.id) || scene) };
+  const next = { ...project, editor_version: Math.max(2, project.editor_version ?? 0), scenes: project.scenes.map(scene => changes.get(scene.id) || scene) };
   const after = projectTimeline(next);
   if (after.totalDuration > 900) throw new Error("전체 영상 길이는 오프닝·엔딩을 포함해 15분 이하여야 합니다.");
   return { project: next, before, after, duration: durationMs / 1000, delta: deltaMs / 1000 };

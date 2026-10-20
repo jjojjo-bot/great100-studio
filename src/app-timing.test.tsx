@@ -40,14 +40,14 @@ it("previews before storing, then changes all scene times in one undoable edit w
   fireEvent.click(screen.getByRole("button", { name: "시간 조정 적용" }));
   await waitFor(() => expect(mock.save).toHaveBeenCalled());
   const changed = mock.save.mock.calls.at(-1)![0];
-  expect(changed).toMatchObject({ editor_version: 2, source: project.source });
+  expect(changed).toMatchObject({ editor_version: 3, source: project.source });
   expect(changed.scenes[0]).toMatchObject({ duration: 14, narration_audio: recording });
   expect(changed.scenes[1].start_sec).toBe(14);
   expect(changed.scenes[0].captions[0]).toMatchObject({ id: project.scenes[0].captions![0].id, end_sec: 14 });
   fireEvent.click(screen.getByRole("button", { name: "실행 취소" }));
   const undo = mock.save.mock.calls.at(-1)![0];
   expect(undo.scenes[1].start_sec).toBe(10); expect(undo.scenes[0].duration).toBe(10);
-  expect(undo.scenes[0].narration_audio).toEqual(recording);
+  expect(undo.scenes[0].narration_audio).toMatchObject(recording);
   expect(screen.getByText(/녹음은 보관되어 있으며/)).toBeTruthy();
   expect(screen.getByRole("button", { name: "실행 취소" }).hasAttribute("disabled")).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "다시 실행" }));
@@ -85,7 +85,7 @@ it("preserves a generation result started before the timing-format upgrade, incl
   await waitFor(() => expect(mock.generate).toHaveBeenCalledOnce());
   await upload(); fireEvent.click(screen.getByLabelText("자막 비율 재배치"));
   fireEvent.click(screen.getByRole("button", { name: "시간 조정 적용" }));
-  await waitFor(() => expect(mock.save.mock.calls.at(-1)![0].editor_version).toBe(2));
+  await waitFor(() => expect(mock.save.mock.calls.at(-1)![0].editor_version).toBe(3));
   await act(async () => finish([{ id: "late", path: "late.png", preview_url: "data:image/png;base64,a", mode: "mock", created_at: "now" }]));
   expect(mock.save.mock.calls.at(-1)![0].scenes[0]).toMatchObject({ duration: 14, narration_audio: recording, candidates: [{ id: "late" }] });
   fireEvent.click(screen.getByRole("button", { name: "실행 취소" }));

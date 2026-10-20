@@ -38,7 +38,9 @@ it("inspects without overwriting old audio and keeps immutable file versions thr
   expect((await getSceneNarration(proposal.project, proposal.project.scenes[0]))!.size).toBe(file.size);
   expect((await getSceneNarration(project, scene))!.size).toBe(3);
   const backup = await db.get("settings", `editor-backup:${project.id}:1`);
-  expect(backup.scenes[0]).toMatchObject({ duration: 10, narration_audio: scene.narration_audio });
+  expect(backup.scenes[0]).toMatchObject({ duration: 10 });
+  const saved = await db.get("projects", project.id);
+  expect(saved.media.assets.some((asset: { path: string }) => asset.path === scene.narration_audio!.path)).toBe(true);
   expect(backup.source).toEqual(project.source);
   const zip = await JSZip.loadAsync(await (await buildProjectZip(proposal.project)).arrayBuffer());
   const folder = `${project.folder_name}/03_images/scene01/`;
