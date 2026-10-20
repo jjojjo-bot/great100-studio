@@ -6,12 +6,15 @@ import type { EditOptions } from "./editor-history";
 import type { ProjectData, Scene, SceneNarrationAudio } from "./types";
 import { hasSceneNarration } from "./scene-audio";
 import { bindComposition, sceneComposition } from "./media-composition";
+import { SceneNarrationGenerator } from "./SceneNarrationGenerator";
+import type { GeneratedNarrationRequest } from "./narration-generation";
 
 type Pending = { project: ProjectData; scene: Scene; duration: number; name: string; prepared?: PreparedNarration; saved?: SceneNarrationAudio };
 const seconds = (value: number) => `${Number(value.toFixed(3))}초`;
 
-export function SceneNarrationPanel({ project, scene, onChange, onTimingChange }: {
+export function SceneNarrationPanel({ project, scene, onChange, onTimingChange, onGeneratedNarration }: {
   project: ProjectData; scene: Scene; onChange: (scene: Scene, options?: EditOptions) => void; onTimingChange: (request: TimingRequest) => void;
+  onGeneratedNarration: (request: GeneratedNarrationRequest) => void;
 }) {
   const input = useRef<HTMLInputElement>(null);
   const recorder = useRef<MediaRecorder | null>(null);
@@ -23,6 +26,7 @@ export function SceneNarrationPanel({ project, scene, onChange, onTimingChange }
   const [recording, setRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [generationBusy, setGenerationBusy] = useState(false);
   const [error, setError] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
   const [pendingUrl, setPendingUrl] = useState("");
@@ -161,7 +165,7 @@ export function SceneNarrationPanel({ project, scene, onChange, onTimingChange }
     finally { if (active.current) setBusy(false); }
   };
 
-  const blocked = busy || recording || !!pending;
+  const blocked = busy || recording || !!pending || generationBusy;
   return <div className="panel narration-panel">
     <div className="narration-head"><div><strong>이 장면의 내레이션</strong><small>{scene.composition?.mode === "segments" ? "각 원본 녹음의 편집 구간을 사용합니다. 새로 녹음하거나 업로드하면 이 장면의 녹음을 교체합니다." : "녹음은 장면 시작에 맞춰 들어갑니다. 길이가 다르면 장면과 자막 시간을 함께 조정할 수 있습니다."}</small></div><span>{seconds(duration)} 장면</span></div>
     <div className="narration-actions"><input ref={input} className="file-input" type="file" disabled={blocked} accept=".mp3,.wav,.m4a,.mp4,.webm,audio/*,video/mp4" aria-label={`Scene ${scene.number} 내레이션 파일 선택`} onChange={event => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void upload(file); }} />
@@ -189,6 +193,7 @@ export function SceneNarrationPanel({ project, scene, onChange, onTimingChange }
       <small>시간 변경은 실행 취소 한 번으로 되돌립니다. 적용한 녹음 파일은 보관됩니다.</small>
     </section>}
     <small className="narration-hint">MP3·WAV·M4A·MP4·WebM · 30MB·120초 이하. 긴 녹음은 저장 전 시간 조정안을 확인합니다. 목소리가 나올 때 배경음악은 자동으로 작아집니다.</small>
+    <SceneNarrationGenerator project={project} scene={scene} disabled={busy || recording || !!pending} onChange={onChange} onApply={onGeneratedNarration} onBusyChange={setGenerationBusy} />
     {error && <div className="error-banner" role="alert">{error}</div>}
   </div>;
 }

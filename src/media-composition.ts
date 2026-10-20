@@ -29,7 +29,7 @@ export function collectMediaAssets(project: ProjectData): MediaAsset[] {
   for (const scene of project.scenes) {
     const voice = scene.narration_audio;
     if (voice) add({ id: narrationAssetId(scene)!, kind: "audio", path: voice.path, mime_type: voice.mime_type, duration_sec: voice.duration_sec,
-      storage_key: voice.storage_key, local_store: "audio", local_key: `${project.id}:narration:${scene.id}${voice.id ? `:${voice.id}` : ""}` });
+      storage_key: voice.storage_key, generation: voice.generation, local_store: "audio", local_key: `${project.id}:narration:${scene.id}${voice.id ? `:${voice.id}` : ""}` });
   }
   const music = project.background_music;
   if (music) add({ id: musicAssetId(project)!, kind: "audio", path: music.path, mime_type: music.mime_type, storage_key: music.storage_key,

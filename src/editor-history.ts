@@ -1,8 +1,8 @@
 import type { ProjectData, Scene } from "./types";
 import { mergeSceneChanges } from "./project-changes";
-import { bindComposition, compositionSignature, sceneComposition } from "./media-composition";
+import { bindComposition, compositionSignature, prepareMediaProject, sceneComposition } from "./media-composition";
 
-export interface EditOptions { history?: boolean; base?: ProjectData; label?: string; structure?: boolean }
+export interface EditOptions { history?: boolean; base?: ProjectData; label?: string; structure?: boolean; narration?: boolean }
 type Target = { kind: "project" | "anchor" | "thumbnail" | "scene"; id?: string };
 type Patch = { target: Target; field: string; before: unknown; after: unknown };
 type Structure = { before: string[]; after: string[]; added: Scene[]; removed: Scene[] };
@@ -27,9 +27,10 @@ const object = (project: ProjectData, target: Target): Record<string, unknown> |
 };
 const valueAt = (project: ProjectData, patch: Pick<Patch, "target" | "field">) => patch.target.kind === "project" && patch.field === "scene_order" ? sceneOrder(project)
   : patch.target.kind === "project" && patch.field === "core_scene_ids" ? project.editor?.core_scene_ids
-    : patch.target.kind === "scene" && patch.field === "visual_composition" ? project.scenes.find(scene => scene.id === patch.target.id)?.composition?.visuals : object(project, patch.target)?.[patch.field];
+    : patch.target.kind === "scene" && patch.field === "visual_composition" ? project.scenes.find(scene => scene.id === patch.target.id)?.composition?.visuals
+      : patch.target.kind === "scene" && patch.field === "audio_composition" ? (() => { const scene = project.scenes.find(item => item.id === patch.target.id); return scene && sceneComposition(scene).narrations; })() : object(project, patch.target)?.[patch.field];
 
-function patchesBetween(before: ProjectData, after: ProjectData, structure = false): Patch[] {
+function patchesBetween(before: ProjectData, after: ProjectData, structure = false, narration = false): Patch[] {
   const patches: Patch[] = [];
   if (!structure && !same(sceneOrder(before), sceneOrder(after))) patches.push({ target: { kind: "project" }, field: "scene_order", before: sceneOrder(before), after: sceneOrder(after) });
   if (!same(before.editor?.core_scene_ids, after.editor?.core_scene_ids)) patches.push({ target: { kind: "project" }, field: "core_scene_ids", before: before.editor?.core_scene_ids, after: after.editor?.core_scene_ids });
@@ -43,7 +44,12 @@ function patchesBetween(before: ProjectData, after: ProjectData, structure = fal
   collect({ kind: "thumbnail" }, ["prompt", "selected_candidate_id"]);
   for (const scene of after.scenes) {
     const fields = structure ? sceneFields : sceneFields.filter(field => field !== "composition");
-    collect({ kind: "scene", id: scene.id }, structure ? [...fields, "narration_audio", "candidates", "support_candidates"] : fields);
+    collect({ kind: "scene", id: scene.id }, structure ? [...fields, "narration_audio", "candidates", "support_candidates"] : narration ? [...fields, "narration_audio"] : fields);
+    if (!structure && narration) {
+      const target: Target = { kind: "scene", id: scene.id }; const field = "audio_composition";
+      const left = valueAt(before, { target, field }); const right = valueAt(after, { target, field });
+      if (!same(left, right)) patches.push({ target, field, before: structuredClone(left), after: structuredClone(right) });
+    }
     if (!structure && scene.composition?.mode === "segments") {
       const target: Target = { kind: "scene", id: scene.id }; const field = "visual_composition";
       const left = valueAt(before, { target, field }); const right = valueAt(after, { target, field });
@@ -66,7 +72,12 @@ function referencesExist(project: ProjectData, patch: Patch): boolean {
 function apply(project: ProjectData, patches: Patch[], direction: "before" | "after"): ProjectData {
   const next = { ...project, anchor: { ...project.anchor }, thumbnail: { ...project.thumbnail }, scenes: project.scenes.map(scene => ({ ...scene })) };
   const visuals = new Map<string, NonNullable<Scene["composition"]>["visuals"]>();
+  const narrations = new Map<string, NonNullable<Scene["composition"]>["narrations"]>();
   for (const patch of patches) {
+    if (patch.target.kind === "scene" && patch.field === "audio_composition") {
+      narrations.set(patch.target.id!, structuredClone(patch[direction]) as NonNullable<Scene["composition"]>["narrations"]);
+      continue;
+    }
     if (patch.target.kind === "scene" && patch.field === "visual_composition") {
       visuals.set(patch.target.id!, structuredClone(patch[direction]) as NonNullable<Scene["composition"]>["visuals"]);
       continue;
@@ -93,7 +104,12 @@ function apply(project: ProjectData, patches: Patch[], direction: "before" | "af
     if (value === undefined) delete target[patch.field];
     else target[patch.field] = value;
   }
-  for (const scene of next.scenes) if (visuals.has(scene.id)) scene.composition = bindComposition(scene, { ...sceneComposition(scene), visuals: visuals.get(scene.id)! });
+  for (const scene of next.scenes) if (visuals.has(scene.id) || narrations.has(scene.id)) {
+    const composition = sceneComposition(scene);
+    const restored = { ...composition, visuals: visuals.has(scene.id) ? visuals.get(scene.id)! : composition.visuals,
+      narrations: narrations.has(scene.id) ? narrations.get(scene.id) || [] : composition.narrations };
+    scene.composition = scene.composition?.mode === "segments" ? bindComposition(scene, restored) : { ...restored, source_signature: compositionSignature(scene) };
+  }
   return next;
 }
 
@@ -124,7 +140,10 @@ export class EditorHistory {
     this.future = this.future.filter(entry => entry.patches.every(patch => referencesExist(available, patch)));
   }
 
-  record(before: ProjectData, after: ProjectData, label?: string, structural = false) {
+  record(before: ProjectData, after: ProjectData, label?: string, structural = false, narration = false) {
+    // First-time media adaptation adds canonical asset IDs. Those derived IDs
+    // must be present on both sides of a reversible narration selection.
+    if (narration) before = prepareMediaProject(before);
     if (label) this.breakGroup();
     this.reset(after.id);
     if (!structural && !sameScenes(before, after)) { this.reset(after.id, true); return; }
@@ -132,7 +151,7 @@ export class EditorHistory {
       added: structuredClone(after.scenes.filter(scene => !before.scenes.some(item => item.id === scene.id))),
       removed: structuredClone(before.scenes.filter(scene => !after.scenes.some(item => item.id === scene.id))) } : undefined;
     this.reconcile(after, structure?.removed);
-    const patches = patchesBetween(before, after, structural);
+    const patches = patchesBetween(before, after, structural, narration);
     if (!patches.length && !structure) return;
     this.future = [];
     const previous = this.past.at(-1);

@@ -630,6 +630,8 @@ export async function buildProjectZip(project: ProjectData, video?: Blob): Promi
     ...historyLines("thumbnail", project.thumbnail),
   ];
   root.file("06_logs/prompt_history.jsonl", promptHistory.join("\n") + (promptHistory.length ? "\n" : ""));
+  const generations = collectMediaAssets(project).filter(asset => asset.generation).map(asset => ({ asset_id: asset.id, ...asset.generation }));
+  if (generations.length) root.file("06_logs/narration_generations.jsonl", generations.map(value => JSON.stringify(value)).join("\n") + "\n");
   const entries = [
     { asset: project.anchor, folder: "02_character", selected: "selected" },
     { asset: project.thumbnail, folder: "04_thumbnail", selected: "selected" },

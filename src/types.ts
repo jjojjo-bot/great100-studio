@@ -79,6 +79,21 @@ export interface SceneNarrationAudio {
   path: string;
   duration_sec: number;
   storage_key?: string;
+  generation?: NarrationGeneration;
+}
+
+export type NarrationPace = "slow" | "normal" | "fast";
+export interface NarrationGeneration {
+  provider: "openai";
+  model: string;
+  request_id: string;
+  provider_request_id?: string;
+  input_text: string;
+  transcript: string;
+  voice: string;
+  pace: NarrationPace;
+  created_at: string;
+  usage?: { input_tokens: number; output_tokens: number; total_tokens: number };
 }
 
 export interface BackgroundMusic {
@@ -106,6 +121,7 @@ export interface MediaAsset {
   preview_url?: string;
   local_store?: "audio" | "media";
   local_key?: string;
+  generation?: NarrationGeneration;
 }
 
 export interface VisualSection {
