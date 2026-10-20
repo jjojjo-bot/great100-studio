@@ -114,5 +114,5 @@ it("does nothing at either boundary and rejects missing scenes or invalid timing
   expect(() => moveScene(project, "missing", 1)).toThrow("장면을 찾지");
   const invalid = structuredClone(project); invalid.scenes[0].captions![0].end_sec = 11;
   expect(() => moveScene(invalid, invalid.scenes[0].id, 1)).toThrow("자막이 장면 범위");
-  expect(() => moveScene({ ...project, editor_version: 4 }, project.scenes[0].id, 1)).toThrow("새로운 편집 형식");
+  expect(() => moveScene({ ...project, editor_version: 5 }, project.scenes[0].id, 1)).toThrow("새로운 편집 형식");
 });

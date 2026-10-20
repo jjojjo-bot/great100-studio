@@ -1,7 +1,7 @@
 import type { ProjectData, Scene } from "./types";
 import { mediaCompositionErrors, prepareMediaProject } from "./media-composition";
 
-export const EDITOR_VERSION = 3;
+export const EDITOR_VERSION = 4;
 const nonempty = (value: unknown): value is string => typeof value === "string" && !!value.trim();
 const sourceJson = (value: unknown) => JSON.stringify(value, (_key, item) => item && typeof item === "object" && !Array.isArray(item)
   ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
@@ -65,7 +65,9 @@ export function prepareEditorWrite(project: ProjectData): ProjectData {
   assertEditorReadable(project);
   const next = (project.editor_version ?? 0) < 2 && project.scenes.some(scene => scene.narration_audio?.id)
     ? { ...readEditorProject(project), editor_version: 2 } : project;
-  return prepareMediaProject(readEditorProject(next));
+  const prepared = prepareMediaProject(readEditorProject(next));
+  return prepared.scenes.some(scene => scene.split_origin || scene.composition?.mode === "segments")
+    ? { ...prepared, editor_version: Math.max(4, prepared.editor_version ?? 0), media: prepared.media || { assets: [] } } : prepared;
 }
 
 export function editorIdentityErrors(project: ProjectData): string[] {

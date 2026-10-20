@@ -38,6 +38,45 @@ async function open() {
 }
 function tabTitles() { return [...screen.getByRole("navigation", { name: "장면 이동" }).querySelectorAll(".scene-tabs button")].map(button => button.textContent); }
 
+function addBoundary() {
+  project.scenes[0].captions = [{ id: "first", text: "앞 문구", start_sec: 0, end_sec: 3 }, { id: "second", text: "뒤 문구", start_sec: 3.1, end_sec: 10 }];
+  project.scenes[0].narration = "앞 문구 뒤 문구";
+}
+
+it("splits at the selected caption, retains the active left scene, and restores both sides in one undo/redo", async () => {
+  addBoundary(); await open();
+  expect(screen.getByLabelText("장면을 나눌 자막 경계")).toHaveProperty("value", "second");
+  fireEvent.click(screen.getByRole("button", { name: "장면 나누기" }));
+  expect(tabTitles()).toEqual(["1이야기 1", "2이야기 1 · 이어짐", "3이야기 2", "4이야기 3"]);
+  expect(screen.getByRole("heading", { name: "이야기 1" })).toBeTruthy();
+  expect(lastSaved().scenes[0].captions?.map(block => block.id)).toEqual(["first"]);
+  expect(lastSaved().scenes[1].captions?.map(block => block.id)).toEqual(["second"]);
+  expect(lastSaved().editor_version).toBe(4); expect(lastSaved().source).toEqual(project.source);
+  undo(); expect(tabTitles()).toEqual(["1이야기 1", "2이야기 2", "3이야기 3"]);
+  expect(lastSaved().scenes[0].captions).toEqual(project.scenes[0].captions);
+  redo(); expect(tabTitles()).toHaveLength(4);
+});
+
+it("retains late generation on an undone child for redo without resurrecting that scene", async () => {
+  addBoundary(); let finish!: (candidates: ImageCandidate[]) => void;
+  mock.generate.mockReturnValue(new Promise<ImageCandidate[]>(resolve => { finish = resolve; }));
+  await open(); fireEvent.click(screen.getByRole("button", { name: "장면 나누기" }));
+  fireEvent.click(screen.getByRole("button", { name: "다음 Scene" }));
+  fireEvent.click(screen.getByRole("button", { name: "후보 2장 생성" }));
+  await waitFor(() => expect(mock.generate).toHaveBeenCalledOnce());
+  undo(); expect(tabTitles()).toHaveLength(3);
+  const candidate: ImageCandidate = { id: "detached", path: "projects/original/detached.png", preview_url: "data:image/png;base64,a", mode: "openai", created_at: "now" };
+  await act(async () => finish([candidate]));
+  expect(lastSaved().scenes).toHaveLength(3);
+  expect(lastSaved().media?.assets.some(asset => asset.id === "candidate:detached")).toBe(true);
+  redo(); expect(lastSaved().scenes).toHaveLength(4);
+  expect(lastSaved().scenes[1].candidates).toContainEqual(candidate);
+});
+
+it("disables splitting when there is no usable caption boundary", async () => {
+  await open(); expect(screen.getByRole("button", { name: "장면 나누기" }).hasAttribute("disabled")).toBe(true);
+});
+
 it("moves the active scene, retains a previous caption edit and undoes each operation separately", async () => {
   await open();
   expect(screen.getByRole("button", { name: "이 장면을 앞으로 이동" }).hasAttribute("disabled")).toBe(true);

@@ -63,6 +63,7 @@ export function sceneComposition(scene: Scene): SceneComposition {
   if (scene.composition && (!Array.isArray(scene.composition.visuals) || !Array.isArray(scene.composition.narrations))) throw new Error("장면의 자료 구간 구성이 잘못되었습니다.");
   const signature = compositionSignature(scene);
   if (scene.composition?.source_signature === signature) return scene.composition;
+  if (scene.composition?.mode === "segments") return updateBoundComposition(scene);
   if (scene.composition && (scene.composition.visuals.length > 1 || scene.composition.narrations.length > 1)) {
     throw new Error("여러 구간으로 구성된 장면은 구간 편집으로 수정해 주세요.");
   }
@@ -78,6 +79,60 @@ export function sceneComposition(scene: Scene): SceneComposition {
     support_asset_id: support ? candidateAssetId(support) : undefined, support_start_sec: timing.supportStart, motion: scene.motion }] : [],
     narrations: voice ? [{ ...scene.composition?.narrations.find(clip => clip.asset_id === narrationAssetId(scene)), id: `${scene.id}:voice`, asset_id: narrationAssetId(scene)!, start_sec: 0, end_sec: Math.min(duration, voice.duration_sec),
       source_start_sec: 0, source_end_sec: Math.min(duration, voice.duration_sec) }] : [] };
+}
+
+export const compositionControls = (scene: Scene): NonNullable<SceneComposition["controls"]> => ({ duration: scene.duration ?? 10,
+  selected: scene.selected_candidate_id, support: scene.support_selected_candidate_id, motion: scene.motion,
+  narration: narrationAssetId(scene), narration_duration: scene.narration_audio?.duration_sec });
+
+export function bindComposition(scene: Scene, composition: SceneComposition): SceneComposition {
+  return { ...composition, mode: "segments", controls: compositionControls(scene), source_signature: compositionSignature(scene) };
+}
+
+export function cropComposition(composition: SceneComposition, from: number, to: number, clock = (time: number) => time): SceneComposition {
+  return { ...composition, visuals: composition.visuals.filter(section => section.end_sec > from && section.start_sec < to).map(section => {
+    const start = Math.max(from, section.start_sec); const end = Math.min(to, section.end_sec);
+    return { ...section, start_sec: Math.round((start - from) * 1000) / 1000, end_sec: Math.round((end - from) * 1000) / 1000,
+      presentation_duration_sec: section.presentation_duration_sec ?? section.end_sec - section.start_sec,
+      playback_offset_sec: (section.playback_offset_sec ?? 0) + clock(start) - clock(section.start_sec) };
+  }), narrations: composition.narrations.filter(clip => clip.end_sec > from && clip.start_sec < to).map(clip => {
+    const start = Math.max(from, clip.start_sec); const end = Math.min(to, clip.end_sec);
+    return { ...clip, start_sec: Math.round((start - from) * 1000) / 1000, end_sec: Math.round((end - from) * 1000) / 1000,
+      timeline_offset_sec: (clip.timeline_offset_sec ?? 0) + from - clock(from),
+      source_start_sec: clip.source_start_sec + start - clip.start_sec, source_end_sec: clip.source_start_sec + end - clip.start_sec };
+  }) };
+}
+
+function updateBoundComposition(scene: Scene): SceneComposition {
+  let composition = structuredClone(scene.composition!);
+  const previous = composition.controls;
+  if (!previous) throw new Error("나눈 장면의 편집 기준을 찾지 못했습니다. 최신 작업을 다시 열어 주세요.");
+  const current = compositionControls(scene);
+  if (current.duration !== previous.duration) {
+    if (current.duration < previous.duration) composition = cropComposition(composition, 0, current.duration);
+    else if (composition.visuals.length) {
+      const last = composition.visuals.at(-1)!;
+      last.end_sec = current.duration;
+      last.presentation_duration_sec = Math.max(last.presentation_duration_sec ?? previous.duration, (last.playback_offset_sec ?? 0) + last.end_sec - last.start_sec);
+    }
+  }
+  if (current.selected !== previous.selected) {
+    const fresh = { ...scene, composition: undefined, video_intro_candidate_id: null, video_intro_duration_sec: 0, video_trim_start_sec: 0, video_trim_end_sec: undefined };
+    composition.visuals = sceneComposition(fresh).visuals;
+  }
+  if (current.support !== previous.support) {
+    const support = scene.support_candidates?.find(candidate => candidate.id === current.support);
+    for (const section of composition.visuals) {
+      section.support_asset_id = support ? candidateAssetId(support) : undefined;
+      section.support_start_sec = support ? (section.playback_offset_sec ?? 0) + (section.end_sec - section.start_sec) / 2 : undefined;
+    }
+  }
+  if (current.motion !== previous.motion) for (const section of composition.visuals) section.motion = current.motion;
+  if (current.narration !== previous.narration || current.narration_duration !== previous.narration_duration || (current.duration !== previous.duration && scene.narration_audio)) {
+    const duration = Math.min(scene.duration ?? 10, scene.narration_audio?.duration_sec ?? 0);
+    composition.narrations = current.narration && duration > 0 ? [{ id: `${scene.id}:voice`, asset_id: current.narration, start_sec: 0, end_sec: duration, source_start_sec: 0, source_end_sec: duration }] : [];
+  }
+  return bindComposition(scene, composition);
 }
 
 // Register old as well as new references before removing anything from a scene.
@@ -123,14 +178,18 @@ export function mediaCompositionErrors(project: ProjectData): string[] {
       if (!Number.isFinite(section.source_start_sec) || section.source_start_sec < 0 || (asset?.kind === "video" && (!Number.isFinite(section.source_end_sec)
         || section.source_end_sec! <= section.source_start_sec || section.source_end_sec! > (asset.duration_sec ?? Infinity) + 0.001))) errors.push(`Scene ${scene.number}의 동영상 원본 구간이 잘못되었습니다.`);
       for (const id of [section.intro_asset_id, section.support_asset_id]) if (id && byId.get(id)?.kind !== "image") errors.push(`Scene ${scene.number}의 보조 화면 원본을 찾지 못했습니다.`);
-      if (section.intro_asset_id && (!Number.isFinite(section.intro_duration_sec) || section.intro_duration_sec! < 0 || section.intro_duration_sec! >= section.end_sec - section.start_sec)) errors.push(`Scene ${scene.number}의 앞 이미지 구간이 잘못되었습니다.`);
-      if (section.support_asset_id && (!Number.isFinite(section.support_start_sec) || section.support_start_sec! < 0 || section.support_start_sec! >= section.end_sec - section.start_sec)) errors.push(`Scene ${scene.number}의 보조 이미지 구간이 잘못되었습니다.`);
+      const presentation = section.presentation_duration_sec ?? section.end_sec - section.start_sec;
+      const offset = section.playback_offset_sec ?? 0;
+      if (!Number.isFinite(presentation) || presentation <= 0 || !Number.isFinite(offset) || offset < 0 || offset + section.end_sec - section.start_sec > presentation + 2 / 15 + 0.001) errors.push(`Scene ${scene.number}의 원본 재생 위치가 잘못되었습니다.`);
+      if (section.intro_asset_id && (!Number.isFinite(section.intro_duration_sec) || section.intro_duration_sec! < 0 || section.intro_duration_sec! >= presentation)) errors.push(`Scene ${scene.number}의 앞 이미지 구간이 잘못되었습니다.`);
+      if (section.support_asset_id && (!Number.isFinite(section.support_start_sec) || section.support_start_sec! < 0 || section.support_start_sec! >= presentation)) errors.push(`Scene ${scene.number}의 보조 이미지 구간이 잘못되었습니다.`);
     }
     if (composition.visuals.length && Math.abs(cursor - duration) > 0.000001) errors.push(`Scene ${scene.number}의 화면 구간이 장면 길이와 다릅니다.`);
     let voiceEnd = 0;
     for (const clip of composition.narrations) {
       const asset = byId.get(clip.asset_id);
       if (!clip.id || clipIds.has(clip.id) || asset?.kind !== "audio" || !validRange(clip.start_sec, clip.end_sec) || clip.start_sec < voiceEnd
+        || !Number.isFinite(clip.timeline_offset_sec ?? 0) || Math.abs(clip.timeline_offset_sec ?? 0) > 2 / 15 + 0.001
         || !Number.isFinite(clip.source_start_sec) || !Number.isFinite(clip.source_end_sec) || clip.source_start_sec < 0 || clip.source_end_sec <= clip.source_start_sec
         || clip.source_end_sec > (asset?.duration_sec ?? Infinity) + 0.001 || Math.abs(clip.end_sec - clip.start_sec - (clip.source_end_sec - clip.source_start_sec)) > 0.001) errors.push(`Scene ${scene.number}의 녹음 구간 또는 원본 연결이 잘못되었습니다.`);
       clipIds.add(clip.id); voiceEnd = clip.end_sec;

@@ -52,7 +52,7 @@ async function seed() {
   await db.put("audio", { id: project.id, blob: new Blob(["music"], { type: "audio/mpeg" }) });
   await db.put("audio", { id: `${project.id}:narration:${project.scenes[0].id}`, blob: new Blob(["voice"], { type: "audio/wav" }) });
   await db.put("media", { id: `${project.id}:scene-video:video`, blob: new Blob(["video"], { type: "video/mp4" }) });
-  await db.put("videos", { id: project.id, updated_at: project.updated_at, render_version: 10, blob: new Blob(["export"], { type: "video/mp4" }) });
+  await db.put("videos", { id: project.id, updated_at: project.updated_at, render_version: 11, blob: new Blob(["export"], { type: "video/mp4" }) });
   db.close(); return project;
 }
 
@@ -114,5 +114,21 @@ it("transfers detached originals with stable asset identities and interval refer
   expect(migrated.media!.assets.find(asset => asset.id === voiceId)).toMatchObject({ storage_key: expect.any(String), path: expect.stringContaining("projects/009_이순신/") });
   expect(migrated.scenes[0].composition!.narrations[0].asset_id).toBe(voiceId);
   expect(mock.upload).toHaveBeenCalledTimes(7);
+  expect(await db.get("projects", original.id)).toEqual(original); db.close();
+});
+
+it("preserves v4 and cropped source windows when moving a split project into an account", async () => {
+  const original = prepareEditorWrite(await seed()); original.editor_version = 4;
+  const { bindComposition } = await import("./media-composition"); const scene = original.scenes[0];
+  scene.split_origin = { parent_scene_id: scene.id, origin_scene_id: scene.id, start_sec: 1, end_sec: 3 };
+  const composition = scene.composition!; composition.narrations[0].source_start_sec = 0.5;
+  composition.narrations[0].source_end_sec = 1.5; composition.narrations[0].start_sec = 0; composition.narrations[0].end_sec = 1;
+  scene.narration_audio = undefined; scene.composition = bindComposition(scene, composition);
+  const db = await openDB("great100-studio", 6); await db.put("projects", original);
+  await importLocalProject(original.id); const migrated = [...mock.saved.values()][0];
+  expect(mock.create.mock.calls[0][0].editor_version).toBe(4); expect(migrated.editor_version).toBe(4);
+  expect(migrated.scenes[0].composition).toEqual(scene.composition);
+  expect(migrated.scenes[0].split_origin).toEqual(scene.split_origin);
+  expect(migrated.media!.assets.find(asset => asset.id === composition.narrations[0].asset_id)?.storage_key).toBeTruthy();
   expect(await db.get("projects", original.id)).toEqual(original); db.close();
 });

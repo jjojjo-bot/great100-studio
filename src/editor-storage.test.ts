@@ -5,11 +5,24 @@ import JSZip from "jszip";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { editorProject } from "../tests/fixtures/editor-project";
 import { buildProjectZip, deleteProject, listProjects, saveProject } from "./platform";
+import { splitScene } from "./scene-split";
 
 const native = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: native.invoke }));
 beforeEach(() => { vi.stubGlobal("window", {}); vi.stubGlobal("indexedDB", new IDBFactory()); native.invoke.mockReset(); });
 afterEach(() => vi.unstubAllGlobals());
+
+it("keeps the pre-split local backup once, reopens v4 and rejects a v3 overwrite", async () => {
+  const project = editorProject(); project.editor_version = 3; project.media = { assets: [] };
+  project.scenes[0].captions = [{ id: "a", text: "세종의 이야기", start_sec: 0, end_sec: 4 }, { id: "b", text: "1", start_sec: 4, end_sec: 10 }];
+  await saveProject(project); const [before] = await listProjects();
+  const split = splitScene(before, "scene_01", "b", "child"); await saveProject(split); await saveProject({ ...split, ending_message: "수정" });
+  const db = await openDB("great100-studio", 6);
+  expect((await db.get("settings", `editor-backup:${project.id}:3`)).scenes).toEqual(before.scenes);
+  const [reopened] = await listProjects(); expect(reopened.editor_version).toBe(4); expect(reopened.scenes).toEqual(split.scenes); expect(reopened.source).toEqual(project.source);
+  await expect(saveProject(before)).rejects.toThrow("더 최신");
+  await deleteProject(reopened); expect(await db.get("settings", `editor-backup:${project.id}:3`)).toBeUndefined(); db.close();
+});
 
 function legacy() {
   const project = editorProject();
@@ -54,7 +67,7 @@ it("backs up a legacy project on first save, preserves editor fields on reopen/Z
 });
 
 it("retains newer projects in the list but refuses to overwrite their format", async () => {
-  const project = { ...editorProject(), editor_version: 4 };
+  const project = { ...editorProject(), editor_version: 5 };
   await listProjects();
   const db = await openDB("great100-studio", 6);
   await db.put("projects", project);

@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-pub const EDITOR_VERSION: u64 = 3;
+pub const EDITOR_VERSION: u64 = 4;
 
 pub fn version(project: &Value) -> Result<u64, String> {
     match project.get("editor_version") {
@@ -57,7 +57,7 @@ mod tests {
         assert!(check_write(&legacy, Some(&round_trip)).is_err());
         edited["source"]["extra"] = json!(false);
         assert!(check_write(&edited, Some(&round_trip)).is_err());
-        edited["editor_version"] = json!(4);
+        edited["editor_version"] = json!(5);
         assert!(check_write(&edited, None).is_err());
     }
 

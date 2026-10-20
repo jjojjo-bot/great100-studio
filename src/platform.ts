@@ -10,12 +10,13 @@ import { detectImageFormat } from "./image-format";
 import { prepareReferenceImage } from "./reference-image";
 import { assertEditorWrite, prepareEditorWrite, readEditorProject } from "./editor-format";
 import { allCandidates, candidateAssetId, collectMediaAssets, compositionSignature, musicAssetId, narrationAssetId, prepareMediaProject } from "./media-composition";
+import { sceneNarrationWav } from "./scene-audio";
 import type { BackgroundMusic, GenerateRequest, ImageCandidate, MediaAsset, ProjectData, Scene, SceneNarrationAudio, VisualAsset } from "./types";
 
 export { detectImageFormat } from "./image-format";
 
 export const isTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-const VIDEO_RENDER_VERSION = 10;
+const VIDEO_RENDER_VERSION = 11;
 
 const database = () => new Promise<IDBPDatabase>((resolve, reject) => {
   let blocked = false;
@@ -134,7 +135,7 @@ export async function importLocalProject(localId: string, onProgress: (message: 
     scene.narration_audio.storage_key = transferred.get(scene.narration_audio.asset_id!)?.storage_key;
     if (scene.composition) scene.composition.source_signature = compositionSignature(scene);
   }
-  if (transferred.size) { target.media = { assets: [...transferred.values()] }; target.editor_version = 3; }
+  if (transferred.size) { target.media = { assets: [...transferred.values()] }; target.editor_version = Math.max(3, original.editor_version ?? 0); }
   onProgress("편집 정보 저장 중");
   await saveCloudProject(withFullImagePrompts(target));
   const rendered = await db.get("videos", original.id) as { blob: Blob; updated_at: string; render_version: number } | undefined;
@@ -236,7 +237,7 @@ export async function deleteProject(project: ProjectData): Promise<string | unde
   const media = tx.objectStore("media");
   const narrationKeys = (await audio.getAllKeys()).filter((key) => typeof key === "string" && (key.startsWith(`${project.id}:narration:`) || key.startsWith(`${project.id}:music:`)));
   const mediaKeys = (await media.getAllKeys()).filter((key) => typeof key === "string" && key.startsWith(`${project.id}:scene-video:`));
-  await Promise.all([tx.objectStore("projects").delete(project.id), tx.objectStore("videos").delete(project.id), ...[0, 1, 2].map(version => tx.objectStore("settings").delete(`editor-backup:${project.id}:${version}`)), audio.delete(project.id), ...narrationKeys.map((key) => audio.delete(key)), ...mediaKeys.map((key) => media.delete(key))]);
+  await Promise.all([tx.objectStore("projects").delete(project.id), tx.objectStore("videos").delete(project.id), ...[0, 1, 2, 3].map(version => tx.objectStore("settings").delete(`editor-backup:${project.id}:${version}`)), audio.delete(project.id), ...narrationKeys.map((key) => audio.delete(key)), ...mediaKeys.map((key) => media.delete(key))]);
   await tx.done;
 }
 
@@ -376,6 +377,7 @@ export async function discardSceneNarration(project: ProjectData, scene: Scene, 
 }
 
 export async function getSceneNarration(project: ProjectData, scene: Scene): Promise<Blob | null> {
+  if (scene.composition?.mode === "segments") return sceneNarrationWav(project, scene, id => getMediaAsset(project, id));
   if (!scene.narration_audio) return null;
   return getMediaAsset(project, narrationAssetId(scene)!);
 }
@@ -597,6 +599,11 @@ export async function buildProjectZip(project: ProjectData, video?: Blob): Promi
     root.file(`01_source/background_music.${project.background_music.path.split(".").at(-1)}`, music);
   }
   for (const scene of project.scenes) {
+    if (scene.composition?.mode === "segments") {
+      const narration = await getSceneNarration(project, scene);
+      if (narration) root.file(`03_images/scene${String(scene.number).padStart(2, "0")}/narration.wav`, narration);
+      continue;
+    }
     if (!scene.narration_audio) continue;
     const narration = originals.get(narrationAssetId(scene)!);
     if (!narration) throw new Error(`Scene ${scene.number} 녹음 파일을 찾지 못했습니다.`);

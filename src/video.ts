@@ -4,6 +4,7 @@ import { openSceneVideo } from "./scene-video";
 import { reportForProject } from "./app-data";
 import { refreshCloudPreviews } from "./cloud";
 import { ensureAacSupport } from "./aac";
+import { narrationTimeline } from "./narration-timeline";
 import { ENDING_DURATION, frameTimeline, milliseconds, OPENING_DURATION, projectTimeline, segmentProgress, snapToFrame, VIDEO_FPS } from "./timeline";
 import type { AudioClip, CaptionBlock, ImageMotion, ProjectData, Scene } from "./types";
 
@@ -18,6 +19,7 @@ export interface VideoSegment {
   caption: string;
   timedCaptions?: CaptionBlock[];
   emphasisSubtitle?: string;
+  emphasisOffset?: number;
   imageUrl?: string;
   videoCandidateId?: string;
   videoAssetId?: string;
@@ -31,6 +33,9 @@ export interface VideoSegment {
   motion: Exclude<ImageMotion, "auto">;
   motionStart?: number;
   motionEnd?: number;
+  playbackOffset?: number;
+  presentationDuration?: number;
+  preservePresentation?: boolean;
   musicVolume: number;
   opening?: boolean;
   ending?: boolean;
@@ -71,7 +76,8 @@ export function buildSceneSegments(project: ProjectData, scene: Scene, index: nu
     const start = sceneBoundary(section.start_sec); const end = sceneBoundary(section.end_sec); const duration = end - start;
     if (duration < 1 / VIDEO_FPS - 0.000001) throw new Error("화면 구간은 한 프레임 이상이어야 합니다.");
     const boundary = (seconds: number) => Math.max(0, Math.min(duration, sceneBoundary(section.start_sec + seconds) - start));
-    const introDuration = section.intro_asset_id ? Math.min(duration - 1 / VIDEO_FPS, boundary(section.intro_duration_sec ?? 0)) : undefined;
+    const bound = composition.mode === "segments";
+    const introDuration = section.intro_asset_id ? bound ? section.intro_duration_sec : Math.min(duration - 1 / VIDEO_FPS, boundary(section.intro_duration_sec ?? 0)) : undefined;
     const captions = project.schema_version === "2.1" ? scene.captions?.map(block => ({ ...block,
       start_sec: Math.max(0, sceneBoundary((milliseconds(block.start_sec) - entry.sourceStartMs) / 1000) - start),
       end_sec: Math.min(duration, sceneBoundary((milliseconds(block.end_sec) - entry.sourceStartMs) / 1000) - start) })).filter(block => block.end_sec > block.start_sec) : undefined;
@@ -84,13 +90,15 @@ export function buildSceneSegments(project: ProjectData, scene: Scene, index: nu
     return { title: scene.title, sceneId: scene.id, caption: project.schema_version === "2.1" ? scene.narration || "" : scene.caption ?? scene.title,
     timedCaptions: captions,
     emphasisSubtitle: project.schema_version === "2.1" ? scene.subtitle : undefined,
+    emphasisOffset: (scene.emphasis_offset_sec ?? 0) + section.start_sec,
     imageUrl: imageUrl(section.intro_asset_id || section.asset_id), videoCandidateId: image.kind === "video" ? image.id.replace(/^candidate:/, "") : undefined,
     videoAssetId: image.kind === "video" ? image.id : undefined, narrationClips,
     videoIntroDuration: introDuration,
     videoTrimStart: image.kind === "video" ? section.source_start_sec : undefined,
     videoTrimEnd: image.kind === "video" ? section.source_end_sec : undefined,
-    supportImageUrl: imageUrl(section.support_asset_id), supportStartsAt: section.support_start_sec === undefined ? undefined : boundary(section.support_start_sec),
+    supportImageUrl: imageUrl(section.support_asset_id), supportStartsAt: section.support_start_sec === undefined ? undefined : bound ? section.support_start_sec : boundary(section.support_start_sec),
     duration, motion: resolveImageMotion(section.motion, index), motionStart: section.motion_start, motionEnd: section.motion_end,
+    playbackOffset: section.playback_offset_sec, presentationDuration: section.presentation_duration_sec, preservePresentation: bound || undefined,
     musicVolume: sceneMusicVolume(scene.music_volume) };
   });
 }
@@ -105,12 +113,29 @@ export function buildVideoPlan(project: ProjectData): VideoSegment[] {
   const hasEnding = !!project.ending_message.trim() || !!thumbnail;
   const total = projectTimeline(project).totalDuration;
   if (total > 900) throw new Error("영상 길이는 15분 이하로 설정해 주세요.");
-  const openingShare = OPENING_DURATION / (OPENING_DURATION + scenes[0].duration);
-  scenes[0].motionStart = openingShare;
+  const openingShare = scenes[0].preservePresentation ? visualPlayback(scenes[0], 0).motionProgress : OPENING_DURATION / (OPENING_DURATION + scenes[0].duration);
+  if (!scenes[0].preservePresentation) scenes[0].motionStart = openingShare;
   const opening: VideoSegment = { title: "오프닝", caption: "", imageUrl: scenes[0].imageUrl, duration: OPENING_DURATION,
     motion: scenes[0].motion, motionEnd: openingShare, musicVolume: scenes[0].musicVolume, opening: true };
   if (hasEnding) scenes.push({ title: "엔딩", caption: project.ending_message.trim(), imageUrl: thumbnail?.preview_url, duration: ENDING_DURATION, motion: "none", musicVolume: scenes.at(-1)?.musicVolume ?? 45, ending: true });
   return [opening, ...scenes];
+}
+
+export function visualPlayback(segment: VideoSegment, seconds: number) {
+  const clamp = (value: number) => Math.max(0, Math.min(1, value));
+  const elapsed = (segment.playbackOffset ?? 0) + seconds;
+  const duration = segment.presentationDuration ?? segment.duration;
+  const progress = segmentProgress(elapsed, duration);
+  const intro = segment.videoIntroDuration ?? 0;
+  const support = segment.supportStartsAt ?? Infinity;
+  const videoActive = !!segment.videoAssetId && elapsed + 0.0000001 >= intro;
+  return { elapsed, videoActive,
+    videoTime: Math.max(0, Math.min((segment.videoTrimStart ?? 0) + Math.max(0, elapsed - intro), (segment.videoTrimEnd ?? Infinity) - 0.001)),
+    motionProgress: (segment.motionStart ?? 0) + progress * ((segment.motionEnd ?? 1) - (segment.motionStart ?? 0)),
+    supportOpacity: segment.supportImageUrl ? clamp((elapsed - support) / Math.min(0.6, duration / 8)) : 0,
+    supportProgress: segment.supportImageUrl ? clamp((elapsed - support) / Math.max(0.01, duration - support)) : 0,
+    introOpacity: videoActive && segment.imageUrl && segment.videoIntroDuration ? clamp(1 - (elapsed - intro) / snapToFrame(0.3)) : 0,
+    emphasisAge: (segment.emphasisOffset ?? 0) + seconds };
 }
 
 type MusicSection = Pick<VideoSegment, "duration" | "musicVolume">;
@@ -391,9 +416,10 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
   let audioSource: import("mediabunny").AudioBufferSource | null = null;
   let music: DecodedAudio | null = null;
   const narrations: NarrationClip[] = [];
+  const voiceTimeline = narrationTimeline(project);
   let audioSampleRate = 0;
   let audioChannels = 0;
-  if (project.background_music || plan.some(segment => segment.narrationClips?.length)) {
+  if (project.background_music || voiceTimeline.length) {
     audioContext = new AudioContext();
     try {
       if (project.background_music) {
@@ -406,22 +432,21 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
       }
       const audioCache = new Map<string, DecodedAudio>();
       const assets = new Map(collectMediaAssets(project).map(asset => [asset.id, asset]));
-      for (const [index, segment] of plan.entries()) {
-        for (const clip of segment.narrationClips || []) {
-          let audio = audioCache.get(clip.asset_id);
-          const asset = assets.get(clip.asset_id);
-          if (!asset) throw new Error(`${segment.title} 녹음 원본 연결을 찾지 못했습니다.`);
-          if (!audio) {
+      for (const clip of voiceTimeline) {
+        const title = project.scenes.find(scene => scene.id === clip.scene_id)?.title || "장면";
+        let audio = audioCache.get(clip.asset_id);
+        const asset = assets.get(clip.asset_id);
+        if (!asset) throw new Error(`${title} 녹음 원본 연결을 찾지 못했습니다.`);
+        if (!audio) {
           const blob = await getMediaAsset(project, asset);
-          if (!blob) throw new Error(`${segment.title} 녹음 파일을 찾지 못했습니다. 다시 녹음하거나 업로드해 주세요.`);
+          if (!blob) throw new Error(`${title} 녹음 파일을 찾지 못했습니다. 다시 녹음하거나 업로드해 주세요.`);
           const buffer = ["audio/mp4", "video/mp4"].includes(asset.mime_type)
             ? await (await import("./music")).decodeMpeg4Audio(blob, audioContext)
             : await audioContext.decodeAudioData(await blob.arrayBuffer());
           audio = decodedAudio(buffer); audioCache.set(clip.asset_id, audio);
-          }
-          if (clip.source_end_sec > audio.duration + 0.05) throw new Error(`${segment.title} 녹음 원본이 지정한 구간보다 짧습니다.`);
-          narrations.push({ start: ranges[index].start + clip.start_sec, end: ranges[index].start + clip.end_sec, sourceStart: clip.source_start_sec, audio });
         }
+        if (clip.source_end_sec > audio.duration + 0.05) throw new Error(`${title} 녹음 원본이 지정한 구간보다 짧습니다.`);
+        narrations.push({ start: clip.start_sec, end: clip.end_sec, sourceStart: clip.source_start_sec, audio });
       }
     }
     catch (error) { await audioContext.close(); throw error; }
@@ -466,31 +491,25 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
       }
       let video: Awaited<ReturnType<typeof openSceneVideo>> | null = null;
       let videoFrames: AsyncIterator<{ canvas: HTMLCanvasElement | OffscreenCanvas } | null> | null = null;
-      const introFrames = segment.videoAssetId && segment.videoIntroDuration
-        ? Math.min(frameCounts[segmentIndex] - 1, Math.max(1, Math.round(segment.videoIntroDuration * VIDEO_FPS))) : 0;
+      const videoTimes = Array.from({ length: frameCounts[segmentIndex] }, (_, index) => visualPlayback(segment, index / VIDEO_FPS)).filter(state => state.videoActive);
       try {
-        if (segment.videoAssetId) {
+        if (segment.videoAssetId && videoTimes.length) {
           const blob = await getMediaAsset(project, segment.videoAssetId);
           if (!blob) throw new Error(`${segment.title}의 동영상 파일을 찾지 못했습니다. 다시 업로드해 주세요.`);
           video = await openSceneVideo(blob);
-          const timestamps = Array.from({ length: frameCounts[segmentIndex] - introFrames }, (_, index) => video!.firstTimestamp + Math.min((segment.videoTrimStart ?? 0) + index / VIDEO_FPS, (segment.videoTrimEnd ?? video!.duration) - 0.001, video!.duration - 0.001));
+          const timestamps = videoTimes.map(state => video!.firstTimestamp + Math.min(state.videoTime, video!.duration - 0.001));
           videoFrames = video.sink.canvasesAtTimestamps(timestamps)[Symbol.asyncIterator]();
         }
       for (let localFrame = 0; localFrame < frameCounts[segmentIndex]; localFrame++) {
         const seconds = localFrame / VIDEO_FPS;
         const progress = segmentProgress(seconds, segment.duration);
         const part = segment.timedCaptions ? activeTimedCaption(segment.timedCaptions, seconds) : captions[segmentIndex][Math.min(captions[segmentIndex].length - 1, Math.floor(progress * captions[segmentIndex].length))];
-        const supportStart = segment.supportStartsAt ?? Infinity;
-        const fadeDuration = Math.min(0.6, segment.duration / 8);
-        const supportOpacity = supportImage ? Math.max(0, Math.min(1, (seconds - supportStart) / fadeDuration)) : 0;
-        const supportProgress = supportImage ? Math.max(0, Math.min(1, (seconds - supportStart) / Math.max(0.01, segment.duration - supportStart))) : 0;
-        const motionProgress = (segment.motionStart ?? 0) + progress * ((segment.motionEnd ?? 1) - (segment.motionStart ?? 0));
+        const state = visualPlayback(segment, seconds);
         const openingOpacity = segment.opening ? Math.min(1, (1 - progress) * segment.duration / 0.8) : 0;
         const captionOpacity = segmentIndex === 1 ? Math.min(1, seconds / 0.5) : 1;
-        const decoded = videoFrames && localFrame >= introFrames ? await videoFrames.next() : null;
+        const decoded = videoFrames && state.videoActive ? await videoFrames.next() : null;
         const visual = decoded && !decoded.done && decoded.value ? decoded.value.canvas : image;
-        const introOpacity = introFrames && localFrame >= introFrames ? Math.max(0, 1 - (localFrame - introFrames) / Math.max(1, Math.round(0.3 * VIDEO_FPS))) : 0;
-        drawFrame(ctx, visual, part, motionProgress, project.person, segment.motion, segment.emphasisSubtitle && seconds < 3 ? segment.emphasisSubtitle : "", seconds, supportImage, supportOpacity, supportProgress, openingOpacity, !!segment.ending, captionOpacity, introOpacity ? image : null, introOpacity);
+        drawFrame(ctx, visual, part, state.motionProgress, project.person, segment.motion, segment.emphasisSubtitle && state.emphasisAge < 3 ? segment.emphasisSubtitle : "", state.emphasisAge, supportImage, state.supportOpacity, state.supportProgress, openingOpacity, !!segment.ending, captionOpacity, state.introOpacity ? image : null, state.introOpacity);
         await source.add(frame / VIDEO_FPS, 1 / VIDEO_FPS);
         frame++;
         if (frame % 7 === 0 || frame === totalFrames) await feedAudioUntil(Math.min(totalFrames / VIDEO_FPS, frame / VIDEO_FPS + 0.5));

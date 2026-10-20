@@ -14,15 +14,14 @@ function merge(base: unknown, next: unknown, current: unknown, field = ""): unkn
         .map(value => {
           const edited = after.get(value.id);
           if (!edited) return value;
-          return field === "scenes" ? mergeScene(before.get(value.id) as Scene | undefined, edited as Scene, value as Scene)
+          return field === "scenes" ? mergeSceneChanges(before.get(value.id) as Scene | undefined, edited as Scene, value as Scene)
             : merge(before.get(value.id), edited, value);
         });
       const ids = new Set(result.map(value => (value as { id: string }).id));
       for (const value of next) if (!before.has(value.id) && !ids.has(value.id)) result.push(value);
-      // Only an explicit permutation changes scene order. A late callback whose
+      // Only an explicit structural edit changes scene order. A late callback whose
       // scene order is unchanged from its base keeps the latest order intact.
-      if (field === "scenes" && base.length === next.length && next.every(value => before.has(value.id))
-        && !same(base.map(value => value.id), next.map(value => value.id))) {
+      if (field === "scenes" && !same(base.map(value => value.id), next.map(value => value.id))) {
         const rank = new Map(next.map((value, index) => [value.id, index]));
         result.sort((left, right) => (rank.get((left as Scene).id) ?? next.length) - (rank.get((right as Scene).id) ?? next.length));
       }
@@ -43,7 +42,7 @@ function merge(base: unknown, next: unknown, current: unknown, field = ""): unkn
   return next;
 }
 
-function mergeScene(base: Scene | undefined, next: Scene, current: Scene): unknown {
+export function mergeSceneChanges(base: Scene | undefined, next: Scene, current: Scene): Scene {
   if (base && Number.isFinite(base.start_sec) && Number.isFinite(current.start_sec) && base.start_sec !== current.start_sec
     && base.start_sec === next.start_sec && base.end_sec === next.end_sec && base.number === next.number) {
     // A callback made before a move still speaks in the old absolute caption
@@ -51,9 +50,9 @@ function mergeScene(base: Scene | undefined, next: Scene, current: Scene): unkno
     const shift = Math.round(current.start_sec! * 1000) - Math.round(base.start_sec! * 1000);
     const rebase = (scene: Scene) => ({ ...scene, captions: scene.captions?.map(block => ({ ...block,
       start_sec: (Math.round(block.start_sec * 1000) + shift) / 1000, end_sec: (Math.round(block.end_sec * 1000) + shift) / 1000 })) });
-    return merge(rebase(base), rebase(next), current);
+    return merge(rebase(base), rebase(next), current) as Scene;
   }
-  return merge(base, next, current);
+  return merge(base, next, current) as Scene;
 }
 
 export function mergeProjectChanges(base: ProjectData | null, next: ProjectData, current: ProjectData): ProjectData {

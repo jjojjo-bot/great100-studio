@@ -4,6 +4,8 @@ import { discardSceneNarration, getSceneNarration, inspectSceneNarration, remove
 import { proposeNarrationTiming, timingFingerprint, type CaptionTimingMode, type TimingRequest } from "./timeline";
 import type { EditOptions } from "./editor-history";
 import type { ProjectData, Scene, SceneNarrationAudio } from "./types";
+import { hasSceneNarration } from "./scene-audio";
+import { bindComposition, sceneComposition } from "./media-composition";
 
 type Pending = { project: ProjectData; scene: Scene; duration: number; name: string; prepared?: PreparedNarration; saved?: SceneNarrationAudio };
 const seconds = (value: number) => `${Number(value.toFixed(3))}초`;
@@ -27,6 +29,8 @@ export function SceneNarrationPanel({ project, scene, onChange, onTimingChange }
   const [pending, setPendingState] = useState<Pending | null>(null);
   const [mode, setMode] = useState<CaptionTimingMode>("keep");
   const duration = scene.duration ?? 10;
+  const hasNarration = hasSceneNarration(scene);
+  const compositionKey = JSON.stringify(scene.composition?.narrations);
   const setPending = (value: Pending | null) => { pendingRef.current = value; if (active.current) setPendingState(value); };
   const discard = (value: Pending) => value.saved ? discardSceneNarration(value.project, value.scene, value.saved).catch(() => {}) : Promise.resolve();
 
@@ -34,7 +38,7 @@ export function SceneNarrationPanel({ project, scene, onChange, onTimingChange }
     let current = true;
     let url = "";
     setPreviewUrl("");
-    if (scene.narration_audio) {
+    if (hasNarration) {
       getSceneNarration(project, scene).then(blob => {
         if (!blob) throw new Error("저장된 녹음을 찾지 못했습니다. 다시 녹음하거나 업로드해 주세요.");
         url = URL.createObjectURL(blob);
@@ -42,7 +46,7 @@ export function SceneNarrationPanel({ project, scene, onChange, onTimingChange }
       }).catch(cause => { if (current) setError(String(cause)); });
     }
     return () => { current = false; if (url) URL.revokeObjectURL(url); };
-  }, [project.id, scene.id, scene.narration_audio?.path, scene.narration_audio?.storage_key]);
+  }, [project.id, scene.id, scene.narration_audio?.path, scene.narration_audio?.storage_key, compositionKey, duration, hasNarration]);
 
   useEffect(() => {
     if (!pending?.prepared) { setPendingUrl(""); return; }
@@ -148,20 +152,25 @@ export function SceneNarrationPanel({ project, scene, onChange, onTimingChange }
     try {
       const current = latest.current;
       await removeSceneNarration(current.project, current.scene);
-      if (active.current) latest.current.onChange({ ...latest.current.scene, narration_audio: undefined }, { history: false });
+      if (active.current) {
+        const next = { ...latest.current.scene, narration_audio: undefined };
+        if (next.composition?.mode === "segments") next.composition = bindComposition(next, { ...sceneComposition(next), narrations: [] });
+        latest.current.onChange(next, { history: false });
+      }
     } catch (cause) { if (active.current) setError(String(cause)); }
     finally { if (active.current) setBusy(false); }
   };
 
   const blocked = busy || recording || !!pending;
   return <div className="panel narration-panel">
-    <div className="narration-head"><div><strong>이 장면의 내레이션</strong><small>녹음은 장면 시작에 맞춰 들어갑니다. 길이가 다르면 장면과 자막 시간을 함께 조정할 수 있습니다.</small></div><span>{seconds(duration)} 장면</span></div>
+    <div className="narration-head"><div><strong>이 장면의 내레이션</strong><small>{scene.composition?.mode === "segments" ? "분할 전 녹음의 해당 구간을 사용합니다. 새로 녹음하거나 업로드하면 이 장면의 녹음을 교체합니다." : "녹음은 장면 시작에 맞춰 들어갑니다. 길이가 다르면 장면과 자막 시간을 함께 조정할 수 있습니다."}</small></div><span>{seconds(duration)} 장면</span></div>
     <div className="narration-actions"><input ref={input} className="file-input" type="file" disabled={blocked} accept=".mp3,.wav,.m4a,.mp4,.webm,audio/*,video/mp4" aria-label={`Scene ${scene.number} 내레이션 파일 선택`} onChange={event => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void upload(file); }} />
-      {recording ? <button className="btn primary" onClick={() => recorder.current?.stop()}><Square size={15} /> 녹음 마치기 · {elapsed.toFixed(1)}초</button> : <button className="btn primary" disabled={blocked} onClick={() => void startRecording()}><Mic size={16} /> {scene.narration_audio ? "다시 녹음" : "녹음 시작"}</button>}
+      {recording ? <button className="btn primary" onClick={() => recorder.current?.stop()}><Square size={15} /> 녹음 마치기 · {elapsed.toFixed(1)}초</button> : <button className="btn primary" disabled={blocked} onClick={() => void startRecording()}><Mic size={16} /> {hasNarration ? "다시 녹음" : "녹음 시작"}</button>}
       <button className="btn ghost" disabled={blocked} onClick={() => input.current?.click()}>{busy ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />} 파일 업로드</button>
       {scene.narration_audio && <button className="btn ghost" disabled={blocked} onClick={() => { setError(""); setMode("keep"); setPending({ project, scene, duration: scene.narration_audio!.duration_sec, name: scene.narration_audio!.name }); }}>녹음 길이에 맞추기</button>}
     </div>
     {scene.narration_audio && <div className="narration-file"><span>{scene.narration_audio.name} · {seconds(scene.narration_audio.duration_sec)}</span>{previewUrl && <audio controls preload="metadata" src={previewUrl} aria-label={`Scene ${scene.number} 내레이션 미리듣기`} />}<button className="btn ghost" disabled={blocked} onClick={() => void remove()}><Trash2 size={15} /> 제거</button></div>}
+    {!scene.narration_audio && hasNarration && <div className="narration-file"><span>원본 녹음의 분할 구간 · {seconds(duration)}</span>{previewUrl && <audio controls preload="metadata" src={previewUrl} aria-label={`Scene ${scene.number} 내레이션 미리듣기`} />}<button className="btn ghost" disabled={blocked} onClick={() => void remove()}><Trash2 size={15} /> 제거</button></div>}
     {scene.narration_audio && scene.narration_audio.duration_sec > duration + 0.15 && <div className="error-banner" role="alert">녹음이 장면보다 깁니다. 녹음은 보관되어 있으며, 영상 출력 전에 녹음 길이에 맞추기를 적용해 주세요.</div>}
     {pending && <section className="narration-adjustment" aria-label="녹음 길이 조정안">
       <strong>녹음 길이에 맞춰 시간 조정</strong><p>{pending.name} · {seconds(pending.duration)} 녹음</p>

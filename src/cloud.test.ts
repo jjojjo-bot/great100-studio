@@ -8,6 +8,7 @@ import { editorProject } from "../tests/fixtures/editor-project";
 import { proposeNarrationTiming } from "./timeline";
 import { moveScene } from "./scene-order";
 import { prepareEditorWrite } from "./editor-format";
+import { splitScene } from "./scene-split";
 
 const userId = "alice";
 const session = { user: { id: userId }, access_token: "alice-token" } as Session;
@@ -21,6 +22,29 @@ beforeEach(() => {
   setCloudSession({ auth: { getSession }, rpc, from } as unknown as SupabaseClient, session);
 });
 afterEach(() => { setCloudSession(null, null); vi.unstubAllGlobals(); });
+
+it("round-trips split windows through the v4 RPC and refuses an obsolete v3 writer", async () => {
+  const draft = { ...editorProject(), cloud_owner_id: userId, cloud_version: 0 };
+  draft.scenes[0].captions = [{ id: "first", text: "세종의 이야기", start_sec: 0, end_sec: 5 }, { id: "second", text: "1", start_sec: 5, end_sec: 10 }];
+  let revision = 0;
+  rpc.mockImplementation(async (_name, input) => { expect(input.p_expected_version).toBe(revision); return { data: [{ version: ++revision }], error: null }; });
+  await saveCloudProject(draft);
+  const split = splitScene(draft, "scene_01", "second", "child"); await saveCloudProject(split);
+  expect(rpc.mock.calls.map(call => call[0])).toEqual(["great100_save_editor_project", "great100_save_structured_project"]);
+  const stored = rpc.mock.calls.at(-1)![1].p_data;
+  expect(stored.scenes[1]).toMatchObject({ id: "child", composition: { mode: "segments" }, split_origin: { start_sec: 5, end_sec: 10 } });
+  expect(stored.source).toEqual(draft.source);
+  const query = { select: () => query, eq: () => query, order: async () => ({ data: [{ id: draft.id, owner_id: userId, data: stored, version: 2 }], error: null }) }; from.mockReturnValue(query);
+  const [reopened] = await listCloudProjects(); expect(reopened.scenes).toEqual(stored.scenes);
+  await expect(saveCloudProject({ ...draft, editor_version: 3 })).rejects.toThrow("더 최신");
+});
+
+it("requires the split migration and never falls back to an older RPC", async () => {
+  const draft = { ...editorProject(), cloud_owner_id: userId, cloud_version: 0, editor_version: 4, media: { assets: [] } };
+  rpc.mockResolvedValue({ data: null, error: { code: "PGRST202" } });
+  await expect(saveCloudProject(draft)).rejects.toThrow("장면 구조 저장 설정");
+  expect(rpc.mock.calls.map(call => call[0])).toEqual(["great100_save_structured_project"]);
+});
 
 it("serializes rapid saves against consecutive server revisions", async () => {
   let revision = 0;
@@ -65,7 +89,7 @@ it("round-trips editor metadata and unknown fields through the version-aware JSO
   const [reopened] = await listCloudProjects();
   expect(reopened).toMatchObject({ editor_version: 1, editor: draft.editor, extra: draft.extra, source: draft.source });
   expect(reopened.scenes[0].captions).toEqual(draft.scenes[0].captions);
-  await expect(saveCloudProject({ ...draft, editor_version: 4 })).rejects.toThrow("새로운 편집 형식");
+  await expect(saveCloudProject({ ...draft, editor_version: 5 })).rejects.toThrow("새로운 편집 형식");
   await expect(saveCloudProject({ ...draft, source_text: "다른 제작안" })).rejects.toThrow("원본 제작안");
   expect(rpc).toHaveBeenCalledTimes(1);
 });

@@ -10,6 +10,7 @@ const migration = readFileSync(new URL("../supabase/migrations/202610190001_clou
 const editorMigration = readFileSync(new URL("../supabase/migrations/202610200001_editor_compatibility.sql", import.meta.url), "utf8");
 const timingMigration = readFileSync(new URL("../supabase/migrations/202610200002_timeline_editing.sql", import.meta.url), "utf8");
 const mediaMigration = readFileSync(new URL("../supabase/migrations/202610200003_media_composition.sql", import.meta.url), "utf8");
+const structureMigration = readFileSync(new URL("../supabase/migrations/202610200004_scene_splitting.sql", import.meta.url), "utf8");
 
 async function asUser(id: string) {
   await db.exec("reset role");
@@ -35,8 +36,37 @@ beforeAll(async () => {
   await db.exec(timingMigration);
   await db.exec(mediaMigration);
   await db.exec(mediaMigration);
+  await db.exec(structureMigration);
+  await db.exec(structureMigration);
 }, 30_000);
 afterAll(async () => { await db.close(); });
+
+it("backs up before splitting, enforces the v4 contract and retains source and originals across undo", async () => {
+  await asUser(alice);
+  const id = "77777777-7777-4777-8777-777777777777";
+  const asset = { id: "voice", kind: "audio", path: "voice.wav", storage_key: "original" };
+  const original = { id, episode: 7, editor_version: 3, source_text: "원문", source: { original: true }, media: { assets: [asset] }, scenes: [{ id: "parent" }] };
+  await db.query("select * from public.great100_save_media_project($1,$2::jsonb,0)", [id, JSON.stringify(original)]);
+  const split = { ...original, editor_version: 4, scenes: [{ id: "parent" }, { id: "child" }] };
+  await db.query("select * from public.great100_save_structured_project($1,$2::jsonb,1)", [id, JSON.stringify(split)]);
+  expect((await db.query<{ data: unknown }>("select data from public.great100_structure_backups where project_id=$1", [id])).rows).toEqual([{ data: original }]);
+  await expect(db.query("select * from public.great100_save_media_project($1,$2::jsonb,2)", [id, JSON.stringify(split)])).rejects.toThrow("PROJECT_EDITOR_VERSION_UNSUPPORTED");
+  await expect(db.query("select * from public.great100_save_media_project($1,$2::jsonb,2)", [id, JSON.stringify(original)])).rejects.toThrow("PROJECT_EDITOR_VERSION_DOWNGRADE");
+  for (const changed of [{ ...split, source_text: "교체" }, { ...split, media: { assets: [] } }]) {
+    await expect(db.query("select * from public.great100_save_structured_project($1,$2::jsonb,2)", [id, JSON.stringify(changed)])).rejects.toThrow(/PROJECT_(SOURCE|MEDIA)_IMMUTABLE/);
+  }
+  await expect(db.query("select * from public.great100_save_structured_project($1,$2::jsonb,1)", [id, JSON.stringify(split)])).rejects.toThrow("PROJECT_CONFLICT");
+  await expect(db.query("select * from public.great100_save_structured_project($1,$2::jsonb,2)", [id, JSON.stringify({ ...split, editor_version: 5 })])).rejects.toThrow("PROJECT_EDITOR_VERSION_UNSUPPORTED");
+  const undone = { ...original, editor_version: 4 };
+  await db.query("select * from public.great100_save_structured_project($1,$2::jsonb,2)", [id, JSON.stringify(undone)]);
+  expect((await db.query<{ data: unknown }>("select data from public.great100_structure_backups where project_id=$1", [id])).rows).toEqual([{ data: original }]);
+  await asUser(bob);
+  expect((await db.query("select * from public.great100_structure_backups")).rows).toEqual([]);
+  await expect(db.query("select * from public.great100_save_structured_project($1,$2::jsonb,3)", [id, JSON.stringify(split)])).rejects.toThrow("PROJECT_CONFLICT");
+  await expect(db.query("delete from public.great100_structure_backups")).rejects.toThrow();
+  await asUser(alice); await db.query("delete from public.great100_projects where id=$1", [id]);
+  expect((await db.query("select * from public.great100_structure_backups where project_id=$1", [id])).rows).toEqual([]);
+});
 
 it("reserves consecutive episode numbers and creates a versioned project", async () => {
   await asUser(alice);

@@ -55,7 +55,7 @@ export function playbackPosition(durations: number[], time: number) {
 export function timingFingerprint(project: ProjectData): string {
   return JSON.stringify([project.id, project.ending_message, project.thumbnail.selected_candidate_id,
     project.scenes.map(scene => [scene.id, scene.number, scene.duration, scene.start_sec, scene.end_sec,
-      scene.captions?.map(block => [block.id, block.start_sec, block.end_sec]), scene.narration_audio])]);
+      scene.captions?.map(block => [block.id, block.start_sec, block.end_sec]), scene.narration_audio, scene.composition?.narrations])]);
 }
 
 function validateCaptions(blocks: CaptionBlock[] | undefined, startMs: number, durationMs: number) {

@@ -80,7 +80,7 @@ it("merges a late caption timing change without replacing the user's newer capti
 
 it("blocks future formats, format downgrades and source replacement", () => {
   const project = editorProject();
-  const future = { ...project, editor_version: 4 };
+  const future = { ...project, editor_version: 5 };
   expect(readEditorProject(future)).toBe(future);
   expect(() => assertEditorWrite(future)).toThrow("새로운 편집 형식");
   expect(() => assertEditorWrite({ ...project, editor_version: undefined }, project)).toThrow("더 최신");
