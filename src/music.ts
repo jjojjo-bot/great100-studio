@@ -24,9 +24,11 @@ export async function inspectMpeg4Audio(blob: Blob): Promise<number> {
   return duration;
 }
 
-export async function decodeMpeg4Audio(blob: Blob, context: AudioContext): Promise<AudioBuffer> {
+export async function decodeMpeg4Audio(blob: Blob, context: AudioContext, signal?: AbortSignal): Promise<AudioBuffer> {
+  signal?.throwIfAborted();
   const { input, track, duration } = await openMpeg4Audio(blob);
   try {
+    signal?.throwIfAborted();
     const sampleRate = await track.getSampleRate();
     const channels = Math.min(2, await track.getNumberOfChannels());
     if (!Number.isFinite(sampleRate) || sampleRate <= 0 || channels < 1) throw new Error("MPEG-4 오디오 형식을 읽을 수 없습니다.");
@@ -34,6 +36,7 @@ export async function decodeMpeg4Audio(blob: Blob, context: AudioContext): Promi
     let firstTimestamp: number | undefined;
     let written = 0;
     for await (const { buffer, timestamp } of new AudioBufferSink(track).buffers()) {
+      signal?.throwIfAborted();
       firstTimestamp ??= timestamp;
       const offset = Math.max(0, Math.round((timestamp - firstTimestamp) * sampleRate));
       const count = Math.min(buffer.length, result.length - offset);

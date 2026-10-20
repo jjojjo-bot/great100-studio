@@ -281,3 +281,26 @@
 .image-library .btn:disabled{cursor:not-allowed}
 @media(max-width:1200px){.library-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.library-card-title{align-items:start;flex-direction:column}}
 @media(max-width:650px){.library-grid,.library-toolbar{grid-template-columns:1fr}.library-heading,.library-pagination{align-items:start;flex-direction:column}}
+
+.export-media-check{padding:20px;margin-bottom:24px}
+.media-check-heading{display:flex;justify-content:space-between;align-items:center;gap:16px}
+.media-check-heading h3{display:flex;gap:8px;align-items:center;color:#214a43;margin:0 0 7px}
+.media-check-heading p,.media-check-note{color:#718178;font-size:12px;line-height:1.7;margin:0}
+.media-check-actions{display:flex;gap:8px;flex-wrap:wrap;flex-shrink:0}
+.media-check-summary{display:flex;align-items:center;gap:7px;background:#f4f1e9;color:#52625d;font-size:12px;line-height:1.7;padding:10px 12px;border-radius:7px;margin:16px 0 10px}
+.media-check-ok{background:#edf2e7;color:#355d50}
+.media-check-problems{margin:16px 0}
+.media-check-problems h4{margin:0 0 8px;color:#a24931;font-size:13px}
+.media-check-problem{padding:12px;background:#fff4ec;border:1px solid #e8c9b5;border-radius:8px;margin:8px 0;font-size:12px;color:#85523c;overflow-wrap:anywhere}
+.media-check-problem p{margin:4px 0 10px;line-height:1.7}
+.media-check-problem>div{display:flex;gap:6px;flex-wrap:wrap}
+.media-check-problem .btn{font-size:11px;white-space:normal;text-align:left}
+.media-check-details{margin:16px 0;font-size:12px;color:#52625d}
+.media-check-details summary{cursor:pointer;margin-bottom:8px}
+.media-check-list{max-height:320px;overflow:auto;border:1px solid #e0dbcf;border-radius:8px;margin-top:10px}
+.media-check-list>div{display:flex;gap:12px;padding:10px;border-bottom:1px solid #e0dbcf;font-size:11px}
+.media-check-list>div:last-child{border-bottom:0}
+.media-check-list strong{flex:0 0 34px}
+.media-check-list span{min-width:0;overflow-wrap:anywhere}
+.media-check-list small{display:block;color:#87938b;line-height:1.6;margin-top:4px}
+@media(max-width:1200px){.media-check-heading{align-items:start;flex-direction:column}}

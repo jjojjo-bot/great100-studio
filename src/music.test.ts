@@ -45,4 +45,11 @@ describe("MPEG-4 background music", () => {
     await expect(inspectMpeg4Audio(new Blob(["mp4"]))).rejects.toThrow("오디오 트랙이 없습니다");
     expect(state.disposed).toBe(1);
   });
+
+  it("stops decoding on cancellation and releases the MPEG-4 input", async () => {
+    const controller = new AbortController();
+    const context = { createBuffer: () => ({ length: 1028, copyToChannel: () => controller.abort() }) } as unknown as AudioContext;
+    await expect(decodeMpeg4Audio(new Blob(["mp4"]), context, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    expect(state.disposed).toBe(1);
+  });
 });

@@ -21,6 +21,7 @@ export interface VideoSegment {
   emphasisSubtitle?: string;
   emphasisOffset?: number;
   imageUrl?: string;
+  imageAssetId?: string;
   videoCandidateId?: string;
   videoAssetId?: string;
   narrationClips?: AudioClip[];
@@ -28,6 +29,7 @@ export interface VideoSegment {
   videoTrimStart?: number;
   videoTrimEnd?: number;
   supportImageUrl?: string;
+  supportImageAssetId?: string;
   supportStartsAt?: number;
   duration: number;
   motion: Exclude<ImageMotion, "auto">;
@@ -91,12 +93,12 @@ export function buildSceneSegments(project: ProjectData, scene: Scene, index: nu
     timedCaptions: captions,
     emphasisSubtitle: project.schema_version === "2.1" ? section.presentation?.subtitle ?? scene.subtitle : undefined,
     emphasisOffset: section.presentation?.emphasis_offset_sec ?? (scene.emphasis_offset_sec ?? 0) + section.start_sec,
-    imageUrl: imageUrl(section.intro_asset_id || section.asset_id), videoCandidateId: image.kind === "video" ? image.id.replace(/^candidate:/, "") : undefined,
+    imageUrl: imageUrl(section.intro_asset_id || section.asset_id), imageAssetId: section.intro_asset_id || section.asset_id, videoCandidateId: image.kind === "video" ? image.id.replace(/^candidate:/, "") : undefined,
     videoAssetId: image.kind === "video" ? image.id : undefined, narrationClips,
     videoIntroDuration: introDuration,
     videoTrimStart: image.kind === "video" ? section.source_start_sec : undefined,
     videoTrimEnd: image.kind === "video" ? section.source_end_sec : undefined,
-    supportImageUrl: imageUrl(section.support_asset_id), supportStartsAt: section.support_start_sec === undefined ? undefined : bound ? section.support_start_sec : boundary(section.support_start_sec),
+    supportImageUrl: imageUrl(section.support_asset_id), supportImageAssetId: section.support_asset_id, supportStartsAt: section.support_start_sec === undefined ? undefined : bound ? section.support_start_sec : boundary(section.support_start_sec),
     duration, motion: resolveImageMotion(section.motion, index), motionStart: section.motion_start, motionEnd: section.motion_end,
     playbackOffset: section.playback_offset_sec, presentationDuration: section.presentation_duration_sec, preservePresentation: bound || undefined,
     musicVolume: sceneMusicVolume(section.presentation?.music_volume ?? scene.music_volume) };
@@ -115,9 +117,9 @@ export function buildVideoPlan(project: ProjectData): VideoSegment[] {
   if (total > 900) throw new Error("영상 길이는 15분 이하로 설정해 주세요.");
   const openingShare = scenes[0].preservePresentation ? visualPlayback(scenes[0], 0).motionProgress : OPENING_DURATION / (OPENING_DURATION + scenes[0].duration);
   if (!scenes[0].preservePresentation) scenes[0].motionStart = openingShare;
-  const opening: VideoSegment = { title: "오프닝", caption: "", imageUrl: scenes[0].imageUrl, duration: OPENING_DURATION,
+  const opening: VideoSegment = { title: "오프닝", caption: "", imageUrl: scenes[0].imageUrl, imageAssetId: scenes[0].imageAssetId, duration: OPENING_DURATION,
     motion: scenes[0].motion, motionEnd: openingShare, musicVolume: scenes[0].musicVolume, opening: true };
-  if (hasEnding) scenes.push({ title: "엔딩", caption: project.ending_message.trim(), imageUrl: thumbnail?.preview_url, duration: ENDING_DURATION, motion: "none", musicVolume: scenes.at(-1)?.musicVolume ?? 45, ending: true });
+  if (hasEnding) scenes.push({ title: "엔딩", caption: project.ending_message.trim(), imageUrl: thumbnail?.preview_url, imageAssetId: thumbnail ? `candidate:${thumbnail.id}` : undefined, duration: ENDING_DURATION, motion: "none", musicVolume: scenes.at(-1)?.musicVolume ?? 45, ending: true });
   return [opening, ...scenes];
 }
 
