@@ -509,6 +509,7 @@ function Studio() {
 
   return (
     <div className="app-shell">
+      <a className="skip-link" href="#studio-workspace">작업 화면으로 바로가기</a>
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark" aria-hidden="true"><span>G</span></div>
@@ -528,7 +529,6 @@ function Studio() {
         </div>
       </aside>
 
-      <a className="skip-link" href="#studio-workspace">작업 화면으로 바로가기</a>
       <main id="studio-workspace" tabIndex={-1} onFocusCapture={() => history.breakGroup()} onBlurCapture={() => history.breakGroup()} onPointerDownCapture={() => history.breakGroup()} onPointerUpCapture={() => history.breakGroup()}>
         <header className="topbar">
           <div className="breadcrumb">한국을 빛낸 100인 <b>/</b> {project?.person || "새 프로젝트"}</div>
