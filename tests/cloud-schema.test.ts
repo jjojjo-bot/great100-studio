@@ -8,6 +8,7 @@ const bob = "22222222-2222-4222-8222-222222222222";
 const project = "33333333-3333-4333-8333-333333333333";
 const migration = readFileSync(new URL("../supabase/migrations/202610190001_cloud_projects.sql", import.meta.url), "utf8");
 const editorMigration = readFileSync(new URL("../supabase/migrations/202610200001_editor_compatibility.sql", import.meta.url), "utf8");
+const timingMigration = readFileSync(new URL("../supabase/migrations/202610200002_timeline_editing.sql", import.meta.url), "utf8");
 
 async function asUser(id: string) {
   await db.exec("reset role");
@@ -29,6 +30,8 @@ beforeAll(async () => {
   await db.exec(migration); // Re-running installation must preserve tables and policies.
   await db.exec(editorMigration);
   await db.exec(editorMigration);
+  await db.exec(timingMigration);
+  await db.exec(timingMigration);
 }, 30_000);
 afterAll(async () => { await db.close(); });
 
@@ -84,4 +87,22 @@ it("backs up legacy data once and blocks old RPCs, including clients echoing the
   await asUser(bob);
   expect((await db.query("select * from public.great100_project_backups")).rows).toEqual([]);
   await expect(db.query("delete from public.great100_project_backups")).rejects.toThrow();
+});
+
+it("retains the pre-timing snapshot and denies editor-v1 writes after the v2 upgrade", async () => {
+  await asUser(alice);
+  const id = "55555555-5555-4555-8555-555555555555";
+  const original = { id, episode: 4, person: "시간 조정", editor_version: 1, source_text: "원본", source: { raw: true }, scenes: [{ id: "stable", duration: 10 }] };
+  await db.query("select * from public.great100_save_editor_project($1,$2::jsonb,0)", [id, JSON.stringify(original)]);
+  const edited = { ...original, editor_version: 2, scenes: [{ id: "stable", duration: 14 }] };
+  await db.query("select * from public.great100_save_timed_project($1,$2::jsonb,1)", [id, JSON.stringify(edited)]);
+  expect((await db.query<{ data: unknown }>("select data from public.great100_timing_backups where project_id=$1", [id])).rows).toEqual([{ data: original }]);
+  await expect(db.query("select * from public.great100_save_editor_project($1,$2::jsonb,2)", [id, JSON.stringify(original)])).rejects.toThrow("PROJECT_EDITOR_VERSION_DOWNGRADE");
+  await expect(db.query("select * from public.great100_save_timed_project($1,$2::jsonb,2)", [id, JSON.stringify({ ...edited, source_text: "덮어쓰기" })])).rejects.toThrow("PROJECT_SOURCE_IMMUTABLE");
+  await expect(db.query("select * from public.great100_save_timed_project($1,$2::jsonb,1)", [id, JSON.stringify(edited)])).rejects.toThrow("PROJECT_CONFLICT");
+  await db.query("select * from public.great100_save_timed_project($1,$2::jsonb,2)", [id, JSON.stringify({ ...edited, scenes: [{ id: "stable", duration: 10 }] })]);
+  expect((await db.query<{ data: unknown }>("select data from public.great100_timing_backups where project_id=$1", [id])).rows).toEqual([{ data: original }]);
+  await asUser(bob);
+  expect((await db.query("select * from public.great100_timing_backups")).rows).toEqual([]);
+  await expect(db.query("delete from public.great100_timing_backups")).rejects.toThrow();
 });

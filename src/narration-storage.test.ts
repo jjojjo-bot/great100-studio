@@ -1,0 +1,48 @@
+import "fake-indexeddb/auto";
+import { IDBFactory } from "fake-indexeddb";
+import { openDB } from "idb";
+import JSZip from "jszip";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { editorProject } from "../tests/fixtures/editor-project";
+import { buildProjectZip, createProjectOnDisk, discardSceneNarration, getSceneNarration, inspectSceneNarration, savePreparedNarration, saveProject } from "./platform";
+import { proposeNarrationTiming } from "./timeline";
+
+beforeEach(() => {
+  vi.stubGlobal("window", {}); vi.stubGlobal("indexedDB", new IDBFactory());
+  vi.stubGlobal("AudioContext", class { decodeAudioData = async () => ({ duration: 14 }); close = async () => {}; });
+});
+afterEach(() => vi.unstubAllGlobals());
+
+it("inspects without overwriting old audio and keeps immutable file versions through cancellation and replacement", async () => {
+  const project = editorProject(); project.project_path = await createProjectOnDisk(project);
+  const scene = project.scenes[0];
+  scene.narration_audio = { name: "old.wav", path: `${project.project_path}/03_images/scene01/narration.wav`, mime_type: "audio/wav", duration_sec: 2 };
+  const db = await openDB("great100-studio", 6);
+  const old = new Blob([new Uint8Array([1, 2, 3])], { type: "audio/wav" });
+  await db.put("audio", { id: `${project.id}:narration:${scene.id}`, blob: old });
+  await saveProject(project);
+  const file = new File([new Uint8Array([82, 73, 70, 70])], "new.wav", { type: "audio/wav" });
+  const prepared = await inspectSceneNarration(file);
+  expect(prepared.duration).toBe(14);
+  expect(await db.count("audio")).toBe(1);
+  expect((await getSceneNarration(project, scene))!.size).toBe(3);
+  const proposal = proposeNarrationTiming(project, scene.id, 14, "keep");
+  const unused = await savePreparedNarration(project, proposal.project.scenes[0], prepared);
+  expect(unused.path).toContain(unused.id);
+  expect(await db.count("audio")).toBe(2);
+  await discardSceneNarration(project, scene, unused);
+  expect(await db.count("audio")).toBe(1);
+  const recording = await savePreparedNarration(project, proposal.project.scenes[0], prepared);
+  proposal.project.scenes[0].narration_audio = recording;
+  await saveProject(proposal.project);
+  expect((await getSceneNarration(proposal.project, proposal.project.scenes[0]))!.size).toBe(file.size);
+  expect((await getSceneNarration(project, scene))!.size).toBe(3);
+  const backup = await db.get("settings", `editor-backup:${project.id}:1`);
+  expect(backup.scenes[0]).toMatchObject({ duration: 10, narration_audio: scene.narration_audio });
+  expect(backup.source).toEqual(project.source);
+  const zip = await JSZip.loadAsync(await (await buildProjectZip(proposal.project)).arrayBuffer());
+  const folder = `${project.folder_name}/03_images/scene01/`;
+  expect(zip.file(`${folder}narration_${recording.id}.wav`)).not.toBeNull();
+  expect(zip.file(`${folder}narration.wav`)).not.toBeNull();
+  db.close();
+});

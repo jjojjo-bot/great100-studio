@@ -1,6 +1,6 @@
 import type { ProjectData, Scene } from "./types";
 
-export const EDITOR_VERSION = 1;
+export const EDITOR_VERSION = 2;
 const nonempty = (value: unknown): value is string => typeof value === "string" && !!value.trim();
 const sourceJson = (value: unknown) => JSON.stringify(value, (_key, item) => item && typeof item === "object" && !Array.isArray(item)
   ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
@@ -19,7 +19,7 @@ export function assertEditorWrite(project: ProjectData, stored?: ProjectData): v
   if ((stored.editor_version ?? 0) > (project.editor_version ?? 0)) {
     throw new Error("저장된 프로젝트의 편집 형식이 더 최신입니다. 최신 작업을 다시 열어 주세요.");
   }
-  if (Math.max(stored.editor_version ?? 0, project.editor_version ?? 0) >= EDITOR_VERSION && (
+  if (Math.max(stored.editor_version ?? 0, project.editor_version ?? 0) >= 1 && (
     stored.source_text !== project.source_text || sourceJson(stored.source) !== sourceJson(project.source)
   )) throw new Error("원본 제작안은 변경할 수 없습니다. 수정한 제작안은 새 프로젝트로 만들어 주세요.");
 }
@@ -28,7 +28,7 @@ export function assertEditorWrite(project: ProjectData, stored?: ProjectData): v
 // paths, source JSON and fields unknown to this client are retained verbatim.
 export function readEditorProject(project: ProjectData): ProjectData {
   try { assertEditorReadable(project); } catch { return project; }
-  if (project.editor_version === EDITOR_VERSION) return project;
+  if ((project.editor_version ?? 0) >= 1) return project;
   const next = structuredClone(project);
   const used = new Set(next.scenes.flatMap(scene => scene.captions || []).map(block => block.id).filter(nonempty));
   for (const scene of next.scenes) {
@@ -44,7 +44,7 @@ export function readEditorProject(project: ProjectData): ProjectData {
   }
   const sourceCore = next.source?.core_achievement.scene_id;
   next.editor ??= { core_scene_ids: sourceCore ? next.scenes.filter(scene => scene.source_scene_ids?.includes(sourceCore)).map(scene => scene.id) : [] };
-  next.editor_version = EDITOR_VERSION;
+  next.editor_version = 1;
   return next;
 }
 
@@ -53,13 +53,18 @@ export function isCoreScene(project: ProjectData, scene: Scene): boolean {
     : !!project.source && project.source.core_achievement.scene_id === (scene.source_scene_id || scene.id);
 }
 
+export function prepareEditorWrite(project: ProjectData): ProjectData {
+  if ((project.editor_version ?? 0) >= 2 || !project.scenes.some(scene => scene.narration_audio?.id)) return project;
+  return { ...readEditorProject(project), editor_version: 2 };
+}
+
 export function editorIdentityErrors(project: ProjectData): string[] {
   const errors: string[] = [];
   try { assertEditorReadable(project); } catch (error) { errors.push((error as Error).message); }
   const scenes = new Set<string>();
   const captions = new Set<string>();
   const numbers = new Set<number>();
-  if (project.editor_version === EDITOR_VERSION && (!Array.isArray(project.editor?.core_scene_ids)
+  if ((project.editor_version ?? 0) >= 1 && (!Array.isArray(project.editor?.core_scene_ids)
     || new Set(project.editor.core_scene_ids).size !== project.editor.core_scene_ids.length)) errors.push("핵심 업적의 편집 장면 연결이 잘못되었습니다.");
   for (const scene of project.scenes) {
     if (!nonempty(scene.id) || scenes.has(scene.id)) errors.push("장면 ID가 없거나 중복되었습니다.");
@@ -68,7 +73,8 @@ export function editorIdentityErrors(project: ProjectData): string[] {
     numbers.add(scene.number);
     const duration = scene.duration ?? 10;
     if (!Number.isFinite(duration) || duration < 1 || duration > 120) errors.push(`Scene ${scene.number}의 길이는 1~120초여야 합니다.`);
-    if (project.editor_version === EDITOR_VERSION) {
+    if (scene.narration_audio && (!Number.isFinite(scene.narration_audio.duration_sec) || scene.narration_audio.duration_sec > duration + 0.15)) errors.push(`Scene ${scene.number}의 녹음이 장면보다 깁니다. 녹음 길이에 맞추기를 적용해 주세요.`);
+    if ((project.editor_version ?? 0) >= 1) {
       if (!Array.isArray(scene.source_scene_ids) || scene.source_scene_ids.some(id => !nonempty(id) || !project.source?.scenes.some(source => source.id === id))) errors.push(`Scene ${scene.number}의 원본 장면 연결이 잘못되었습니다.`);
       for (const block of scene.captions || []) {
         if (!nonempty(block.id) || captions.has(block.id)) errors.push(`Scene ${scene.number}의 자막 ID가 없거나 중복되었습니다.`);

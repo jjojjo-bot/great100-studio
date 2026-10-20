@@ -51,7 +51,7 @@ async function seed() {
   await db.put("audio", { id: project.id, blob: new Blob(["music"], { type: "audio/mpeg" }) });
   await db.put("audio", { id: `${project.id}:narration:${project.scenes[0].id}`, blob: new Blob(["voice"], { type: "audio/wav" }) });
   await db.put("media", { id: `${project.id}:scene-video:video`, blob: new Blob(["video"], { type: "video/mp4" }) });
-  await db.put("videos", { id: project.id, updated_at: project.updated_at, render_version: 8, blob: new Blob(["export"], { type: "video/mp4" }) });
+  await db.put("videos", { id: project.id, updated_at: project.updated_at, render_version: 9, blob: new Blob(["export"], { type: "video/mp4" }) });
   db.close(); return project;
 }
 
@@ -85,4 +85,15 @@ it("resumes an interrupted transfer using its existing project and uploaded file
   expect(mock.create).toHaveBeenCalledTimes(1); expect(mock.upload).toHaveBeenCalledTimes(7);
   expect([...mock.saved.values()][0].migration_pending).toBe(false);
   expect(await listLocalProjects()).toEqual([original]);
+});
+
+it("keeps an older rendered MP4 locally and requires regeneration for the new timeline", async () => {
+  const project = await seed();
+  const db = await openDB("great100-studio", 6);
+  const old = await db.get("videos", project.id); old.render_version = 8; await db.put("videos", old);
+  await importLocalProject(project.id);
+  expect(mock.export).not.toHaveBeenCalled();
+  expect((await db.get("videos", project.id)).render_version).toBe(8);
+  expect([...mock.saved.values()][0].migration_pending).toBe(false);
+  db.close();
 });

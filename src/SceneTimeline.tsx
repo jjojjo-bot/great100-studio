@@ -4,6 +4,7 @@ import { FullVideoPreview } from "./FullVideoPreview";
 import { getSceneNarration } from "./platform";
 import { resolveVideoIntroImage, sceneTiming } from "./video";
 import type { ProjectData, Scene } from "./types";
+import { sourceCaptionTiming } from "./timeline";
 
 export type TimelineSection = { label: string; kind: "image" | "video" | "hold"; start: number; end: number };
 
@@ -32,7 +33,7 @@ export function ScenePreviewPane({ project, scene, onChange }: { project: Projec
   const scrubbingPointer = useRef<number | null>(null);
   const duration = Math.max(0.1, scene.duration ?? 10);
   const sections = sceneVisualSections(scene);
-  const sourceCaptions = project.source?.scenes.find((item) => item.id === (scene.source_scene_id || scene.id))?.captions;
+  const sourceCaptions = sourceCaptionTiming(project, scene);
   const canReset = !!sourceCaptions && sourceCaptions.length === scene.captions?.length && scene.captions.some((block, index) => block.start_sec !== sourceCaptions[index].start_sec || block.end_sec !== sourceCaptions[index].end_sec);
   const seek = (time: number) => {
     const clamped = Math.max(0, Math.min(duration, time));
@@ -68,7 +69,7 @@ export function ScenePreviewPane({ project, scene, onChange }: { project: Projec
     if (!scene.narration_audio) { setNarrationBlob(null); return; }
     void getSceneNarration(project, scene).then((blob) => { if (active) setNarrationBlob(blob); }).catch(() => { if (active) setNarrationBlob(null); });
     return () => { active = false; };
-  }, [project.id, scene.id, scene.narration_audio?.path]);
+  }, [project.id, scene.id, scene.narration_audio?.path, scene.narration_audio?.storage_key]);
 
   return <div className="scene-workspace-preview">
     {scene.selected_candidate_id ? <FullVideoPreview project={project} sceneId={scene.id} seekRequest={seekRequest} onPositionChange={setPosition} /> : <div className="panel scene-preview-empty"><strong>이 장면의 미리보기</strong><p>이미지나 동영상을 선택하면 이곳에서 자막과 화면을 확인할 수 있습니다.</p></div>}

@@ -5,6 +5,7 @@ import { SAMPLE_WORK_TEXT } from "./sample";
 import { setCloudSession } from "./cloud-session";
 import { cloudContext, cloudFileUrls, listCloudProjects, saveCloudProject, saveCloudRenderedVideo, uploadCloudFile } from "./cloud";
 import { editorProject } from "../tests/fixtures/editor-project";
+import { proposeNarrationTiming } from "./timeline";
 
 const userId = "alice";
 const session = { user: { id: userId }, access_token: "alice-token" } as Session;
@@ -45,7 +46,7 @@ it("round-trips editor metadata and unknown fields through the version-aware JSO
   const [reopened] = await listCloudProjects();
   expect(reopened).toMatchObject({ editor_version: 1, editor: draft.editor, extra: draft.extra, source: draft.source });
   expect(reopened.scenes[0].captions).toEqual(draft.scenes[0].captions);
-  await expect(saveCloudProject({ ...draft, editor_version: 2 })).rejects.toThrow("새로운 편집 형식");
+  await expect(saveCloudProject({ ...draft, editor_version: 3 })).rejects.toThrow("새로운 편집 형식");
   await expect(saveCloudProject({ ...draft, source_text: "다른 제작안" })).rejects.toThrow("원본 제작안");
   expect(rpc).toHaveBeenCalledTimes(1);
 });
@@ -55,6 +56,18 @@ it("requires the editor migration instead of falling back to the legacy save RPC
   await expect(saveCloudProject(project())).rejects.toThrow("편집 형식 저장 설정");
   expect(rpc).toHaveBeenCalledTimes(1);
   expect(rpc.mock.calls[0][0]).toBe("great100_save_editor_project");
+});
+
+it("saves a timing edit through the v2 RPC and rejects a stale v1 snapshot afterwards", async () => {
+  const draft = { ...editorProject(), cloud_owner_id: userId, cloud_version: 0 };
+  let version = 0; rpc.mockImplementation(async () => ({ data: [{ version: ++version }], error: null }));
+  await saveCloudProject(draft);
+  const next = proposeNarrationTiming(draft, draft.scenes[0].id, 14, "scale").project;
+  await saveCloudProject(next);
+  expect(rpc.mock.calls.map(call => call[0])).toEqual(["great100_save_editor_project", "great100_save_timed_project"]);
+  expect(rpc.mock.calls[1][1].p_data).toMatchObject({ editor_version: 2, source: draft.source });
+  expect(rpc.mock.calls[1][1].p_data.scenes[1].start_sec).toBe(14);
+  await expect(saveCloudProject(draft)).rejects.toThrow("더 최신");
 });
 
 it("stops queued edits after another PC wins a revision conflict", async () => {

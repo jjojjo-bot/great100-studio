@@ -39,7 +39,8 @@ import { PersonPicker } from "./PersonPicker";
 import { useStepHistory } from "./useStepHistory";
 import { useEditorHistory } from "./useEditorHistory";
 import type { EditOptions } from "./editor-history";
-import { assertEditorReadable, assertEditorWrite, isCoreScene } from "./editor-format";
+import { assertEditorReadable, assertEditorWrite, isCoreScene, prepareEditorWrite } from "./editor-format";
+import { proposeNarrationTiming, timingFingerprint, type TimingRequest } from "./timeline";
 import { AccountMenu, AuthGate } from "./Auth";
 import { checkCloudStorage, cloudContext } from "./cloud";
 import { mergeProjectChanges } from "./project-changes";
@@ -176,6 +177,9 @@ function Studio() {
 
   const persist = async (next: ProjectData, options: EditOptions = {}) => {
     const current = latestProjects.current.get(next.id) || next;
+    // In-flight callbacks from this client may predate a timing-format upgrade.
+    // Merge their changed fields into the current version without downgrading it.
+    next = prepareEditorWrite({ ...next, editor_version: Math.max(next.editor_version ?? 0, current.editor_version ?? 0) });
     try { assertEditorWrite(next, current); }
     catch (error) { setNotice((error as Error).message); return; }
     const merged = mergeProjectChanges(options.base || project, next, current);
@@ -189,7 +193,7 @@ function Studio() {
     } : merged.app_state };
     if (projectRef.current?.id === updated.id) {
       if (options.history === false) history.reconcile(updated);
-      else history.record(current, updated);
+      else history.record(current, updated, options.label);
       refreshHistory();
     }
     latestProjects.current.set(updated.id, updated);
@@ -233,6 +237,15 @@ function Studio() {
   const updateScene = async (scene: Scene, options?: EditOptions) => {
     if (!project) return;
     await persist({ ...project, scenes: project.scenes.map((item) => (item.id === scene.id ? scene : item)) }, options);
+  };
+
+  const applyNarrationTiming = (request: TimingRequest) => {
+    const current = latestProjects.current.get(request.projectId);
+    if (!current || timingFingerprint(current) !== request.expected) throw new Error("시간이나 녹음이 변경되었습니다. 최신 조정안을 확인하고 다시 적용해 주세요.");
+    assertEditorReadable(current);
+    const proposal = proposeNarrationTiming(current, request.sceneId, request.narrationDuration, request.mode);
+    const next = request.narration ? { ...proposal.project, scenes: proposal.project.scenes.map(scene => scene.id === request.sceneId ? { ...scene, narration_audio: request.narration } : scene) } : proposal.project;
+    void persist(next, { base: current, label: "녹음 길이에 맞추기" });
   };
 
   const travelHistory = (direction: "undo" | "redo") => {
@@ -317,7 +330,7 @@ function Studio() {
           {step === 2 && project && <ParseReview project={project} onChange={persist} onReparse={reparseSource} onError={setNotice} />}
           {step === 3 && project && <Preflight project={project} />}
           {step === 4 && project && <AssetStudio title="인물 기준 이미지" eyebrow="CHARACTER ANCHOR" description="얼굴 일관성을 위한 기준 이미지입니다. 업로드한 이미지가 있으면 생성 단계를 건너뛰어도 됩니다." asset={project.anchor} project={project} kind="anchor" onChange={(anchor, options) => persist({ ...project, anchor }, options)} />}
-          {step === 5 && project && <SceneStudio project={project} onChange={updateScene} onProjectChange={persist} />}
+          {step === 5 && project && <SceneStudio project={project} onChange={updateScene} onProjectChange={persist} onTimingChange={applyNarrationTiming} />}
           {step === 6 && project && <AssetStudio title="썸네일 만들기" eyebrow="THUMBNAIL" description="대표 이미지를 선택하세요. 선택한 썸네일은 영상 마지막 인물 이름 화면의 배경에도 사용됩니다." asset={project.thumbnail} project={project} kind="thumbnail" onChange={(thumbnail, options) => persist({ ...project, thumbnail }, options)} />}
           {step === 7 && project && <ImageReview project={project} />}
           {step === 8 && project && <Complete project={project} onDownload={() => download(project)} />}
@@ -552,7 +565,7 @@ function BackgroundMusicPanel({ project, onChange }: { project: ProjectData; onC
   return <div className="panel background-music-panel"><div className="music-head"><Music2 size={20} /><div><strong>영상 배경음악</strong><small>음악 한 곡이 영상 전체에 반복됩니다. 장면마다 아래에서 볼륨을 조절하세요.</small></div><input ref={input} className="file-input" type="file" accept=".mp3,.wav,.m4a,.mp4,audio/mpeg,audio/wav,audio/mp4,video/mp4" aria-label="배경음악 파일 선택" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void upload(file); }} /><button className="btn ghost" disabled={busy} onClick={() => input.current?.click()}>{busy ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />}{project.background_music ? "음악 교체" : "음악 업로드"}</button></div>{project.background_music && <div className="music-file"><span>{project.background_music.name}</span>{previewUrl && <audio controls preload="metadata" src={previewUrl} aria-label="배경음악 미리듣기" />}<button className="btn ghost" disabled={busy} onClick={remove}><Trash2 size={15} /> 제거</button></div>}<small className="music-hint">MP3·WAV·M4A·MP4(MPEG-4), 100MB·15분 이하 · 사용 권한이 있는 음악을 선택해 주세요.</small>{error && <div className="error-banner">{error}</div>}</div>;
 }
 
-function SceneStudio({ project, onChange, onProjectChange }: { project: ProjectData; onChange: (scene: Scene, options?: EditOptions) => void; onProjectChange: (project: ProjectData) => Promise<void> }) {
+function SceneStudio({ project, onChange, onProjectChange, onTimingChange }: { project: ProjectData; onChange: (scene: Scene, options?: EditOptions) => void; onProjectChange: (project: ProjectData) => Promise<void>; onTimingChange: (request: TimingRequest) => void }) {
   const [active, setActive] = useState(project.scenes[0]?.id || "");
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
@@ -639,7 +652,7 @@ function SceneStudio({ project, onChange, onProjectChange }: { project: ProjectD
     <div className="panel scene-video-upload"><div><strong>짧은 동영상 추가</strong><small>MP4 · 최대 10초 · 50MB 이하. 이미지도 함께 올리면 이미지가 먼저 잠깐 보인 뒤 영상으로 이어집니다. 원본 소리는 사용하지 않습니다.</small></div><input ref={videoInput} className="file-input" type="file" accept=".mp4,video/mp4" aria-label="장면 MP4 파일 선택" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void uploadVideo(file); }} /><button className="btn ghost" disabled={videoBusy || uploading} onClick={() => videoInput.current?.click()}>{videoBusy ? <LoaderCircle className="spin" size={17} /> : <Upload size={17} />}{videoBusy ? "동영상 처리 중…" : "MP4 업로드"}</button></div>
     <div className="panel full-prompt-panel"><div className="full-prompt-head"><div><strong>복사용 전체 이미지 프롬프트</strong><small>장면 내용 + 인물 외형 기준 + 공통 스타일이 항상 함께 들어갑니다.</small></div><button className="btn ghost" disabled={!scene.prompt.trim()} onClick={copyFullPrompt}>{copied ? <Check size={16} /> : <Copy size={16} />}{copied ? "복사됨" : "전체 프롬프트 복사"}</button></div><textarea aria-label="복사용 전체 이미지 프롬프트" readOnly value={fullPrompt} /></div>
     {project.schema_version === "2.1" ? <V21CaptionEditor scene={scene} sourceMotion={project.source?.scenes.find((item) => item.id === (scene.source_scene_id || scene.id))?.motion} onChange={onChange} /> : <div className="panel caption-panel"><label><strong>영상 자막</strong><small>이 문장이 장면 이미지 위에 표시됩니다.</small><textarea aria-label="영상 자막" value={scene.caption ?? scene.title} onChange={(event) => onChange({ ...scene, caption: event.target.value })} /></label><label className="duration-label"><strong>표시 시간 (초)</strong><input aria-label="장면 표시 시간" type="number" min="1" max="120" step="1" disabled={project.schema_version === "2.0"} title={project.schema_version === "2.0" ? "v2 시간은 APP_DATA의 시작·종료 시간을 따릅니다." : undefined} value={scene.duration ?? 10} onChange={(event) => onChange({ ...scene, duration: Number(event.target.value) })} /></label><label className="motion-label"><strong>이미지 효과</strong><small>MP4에 적용됩니다.</small><select aria-label="이미지 효과" value={scene.motion ?? "auto"} onChange={(event) => onChange({ ...scene, motion: event.target.value as ImageMotion })}><option value="auto">자동 (장면마다 다르게)</option><option value="zoom-in">천천히 줌인</option><option value="zoom-out">천천히 줌아웃</option><option value="pan-left">왼쪽으로 이동</option><option value="pan-right">오른쪽으로 이동</option><option value="pan-up">위로 이동</option><option value="pan-down">아래로 이동</option><option value="none">효과 없음</option></select></label></div>}
-    <SceneNarrationPanel key={scene.id} project={project} scene={scene} onChange={onChange} />
+    <SceneNarrationPanel key={`${project.id}:${scene.id}`} project={project} scene={scene} onChange={onChange} onTimingChange={onTimingChange} />
     <div className="panel music-volume-panel"><label><strong>이 장면의 배경음악 볼륨</strong><small>{project.background_music ? "장면이 바뀔 때 볼륨도 부드럽게 바뀝니다." : "음악을 추가하면 이 설정이 적용됩니다."}</small><input aria-label="장면 배경음악 볼륨" type="range" min="0" max="100" step="1" value={sceneMusicVolume(scene.music_volume)} onChange={(event) => onChange({ ...scene, music_volume: Number(event.target.value) })} /></label><output>{sceneMusicVolume(scene.music_volume)}%</output></div>
     {error && <div className="error-banner">{error}</div>}
     <CandidateGrid candidates={scene.candidates} selected={scene.selected_candidate_id} onSelect={(id) => onChange({ ...scene, selected_candidate_id: id })} onDelete={(id) => removeCandidate(id)} emptyLabel="이 장면의 이미지나 동영상을 업로드해 보세요" />
@@ -656,7 +669,7 @@ function V21CaptionEditor({ scene, sourceMotion, onChange }: { scene: Scene; sou
   return <div className="panel v21-caption-panel">
     <label><strong>강조 자막 · subtitle (선택)</strong><small>비워두면 강조 문구 없이 아래 전체 자막만 표시됩니다.</small><textarea aria-label="강조 자막" value={scene.subtitle || ""} onChange={(event) => onChange({ ...scene, subtitle: event.target.value, title: event.target.value.trim() || `Scene ${String(scene.number).padStart(2, "0")}` })} /></label>
     <div className="caption-blocks"><strong>전체 내레이션 자막 · captions {scene.captions?.length || 0}개</strong><small>Work가 나눈 의미 단위와 표시 시간을 그대로 사용합니다. MP4 하단에 순서대로 나타납니다.</small>{scene.captions?.map((block, index) => <div className="caption-block-row" key={block.id || index}><span>{index + 1}</span><textarea aria-label={`Caption ${index + 1} 텍스트`} value={block.text} onChange={(event) => editBlock(index, { text: event.target.value })} /><label>시작<input aria-label={`Caption ${index + 1} 시작`} type="number" step="0.1" value={block.start_sec} onChange={(event) => editBlock(index, { start_sec: Number(event.target.value) })} /></label><label>종료<input aria-label={`Caption ${index + 1} 종료`} type="number" step="0.1" value={block.end_sec} onChange={(event) => editBlock(index, { end_sec: Number(event.target.value) })} /></label></div>)}</div>
-    <div className="caption-settings"><span>표시 시간: {scene.duration}초 (APP_DATA 기준)</span><label><strong>영상 움직임 · motion</strong><small>이미지 구도 · shot_type: {scene.shot_type || "미지정"} (이미지 프롬프트에 적용)</small>{sourceMotion && <small>제작안 원문 움직임: {sourceMotion}</small>}<select aria-label="이미지 효과" value={scene.motion ?? "auto"} onChange={(event) => onChange({ ...scene, motion: event.target.value as ImageMotion })}><option value="auto">자동 (기본 움직임)</option><option value="zoom-in">줌인</option><option value="zoom-out">줌아웃</option><option value="pan-left">왼쪽으로 이동</option><option value="pan-right">오른쪽으로 이동</option><option value="pan-up">위로 이동</option><option value="pan-down">아래로 이동</option><option value="none">효과 없음</option></select></label></div>
+    <div className="caption-settings"><span>표시 시간: {scene.duration}초 (현재 편집 기준)</span><label><strong>영상 움직임 · motion</strong><small>이미지 구도 · shot_type: {scene.shot_type || "미지정"} (이미지 프롬프트에 적용)</small>{sourceMotion && <small>제작안 원문 움직임: {sourceMotion}</small>}<select aria-label="이미지 효과" value={scene.motion ?? "auto"} onChange={(event) => onChange({ ...scene, motion: event.target.value as ImageMotion })}><option value="auto">자동 (기본 움직임)</option><option value="zoom-in">줌인</option><option value="zoom-out">줌아웃</option><option value="pan-left">왼쪽으로 이동</option><option value="pan-right">오른쪽으로 이동</option><option value="pan-up">위로 이동</option><option value="pan-down">아래로 이동</option><option value="none">효과 없음</option></select></label></div>
   </div>;
 }
 
@@ -721,7 +734,7 @@ function Complete({ project, onDownload }: { project: ProjectData; onDownload: (
     <div className="eyebrow">VIDEO EXPORT</div>
     <h2>{project.person} 편 영상 만들기</h2>
     <p>3초 타이틀 뒤에 장면 이미지·동영상·자막{narrationDone ? "·녹음한 내레이션" : ""}{project.background_music ? "·배경음악" : ""}이 이어지고, 마지막에는 썸네일 배경의 인물 이름 화면이 나옵니다. 녹음하지 않은 장면은 음성 없이 재생됩니다.</p>
-    <div className="summary-cards"><div><span>회차</span><strong>{String(project.episode).padStart(3, "0")}</strong></div><div><span>선택 장면</span><strong>{sceneDone}/{project.scenes.length}</strong></div><div><span>녹음 장면</span><strong>{narrationDone}/{project.scenes.length}</strong></div><div><span>영상 길이</span><strong>{duration ? `${duration}초` : "이미지 확인"}</strong></div></div>
+    <div className="summary-cards"><div><span>회차</span><strong>{String(project.episode).padStart(3, "0")}</strong></div><div><span>선택 장면</span><strong>{sceneDone}/{project.scenes.length}</strong></div><div><span>녹음 장면</span><strong>{narrationDone}/{project.scenes.length}</strong></div><div><span>영상 길이</span><strong>{duration ? `${Number(duration.toFixed(1))}초` : "이미지 확인"}</strong></div></div>
     <div className="folder-tree"><FolderOpen size={22} /><div><strong>{project.project_path}</strong><small>완성 MP4: 05_exports/{project.folder_name}.mp4 · 1280×720 · {narrationDone ? "내레이션" : "내레이션 없음"}{project.background_music ? " + 배경음악" : ""}</small></div></div>
     <div className="video-actions"><button className="btn primary export-button" disabled={rendering} onClick={makeVideo}>{rendering ? <LoaderCircle className="spin" size={17} /> : <Download size={17} />}{rendering ? `MP4 만드는 중… ${percent}%` : video ? "MP4 다시 만들기" : "MP4 만들기"}</button>{video && <><button className="btn ghost export-button" onClick={() => downloadBlob(video, `${project.folder_name}.mp4`)}><Download size={17} /> MP4 다시 다운로드</button>{!isTauri() && <button className="btn ghost export-button" onClick={onDownload}><Download size={17} /> MP4 포함 ZIP 다운로드</button>}</>}</div>
     {rendering && <div className="render-progress"><i style={{ width: `${percent}%` }} /></div>}

@@ -68,6 +68,7 @@ export interface Scene {
 }
 
 export interface SceneNarrationAudio {
+  id?: string;
   name: string;
   mime_type: string;
   path: string;

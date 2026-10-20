@@ -165,8 +165,9 @@ fn save_project(project: Value) -> Result<(), String> {
     editor_format::check_write(&project, stored.as_ref())?;
     fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     if let Some(previous) = stored.as_ref() {
-        let backup = dir.join("project_data.pre-editor-v1.json");
-        if editor_format::version(previous)? == 0 && editor_format::version(&project)? >= 1 && !backup.exists() {
+        let next_version = editor_format::version(&project)?;
+        let backup = dir.join(format!("project_data.pre-editor-v{next_version}.json"));
+        if editor_format::version(previous)? < next_version && !backup.exists() {
             fs::copy(&data_path, backup).map_err(|error| error.to_string())?;
         }
     }
@@ -389,8 +390,12 @@ fn narration_dir(project_path: &str, scene_number: u32) -> Result<PathBuf, Strin
     Ok(dir)
 }
 
-fn checked_narration_path(dir: &Path, extension: &str) -> Result<PathBuf, String> {
-    let path = dir.join(format!("narration.{extension}"));
+fn checked_narration_path(dir: &Path, extension: &str, file_id: Option<&str>) -> Result<PathBuf, String> {
+    let name = if let Some(id) = file_id {
+        Uuid::parse_str(id).map_err(|_| "녹음 파일 ID가 올바르지 않습니다.")?;
+        format!("narration_{id}.{extension}")
+    } else { format!("narration.{extension}") };
+    let path = dir.join(name);
     if let Ok(metadata) = fs::symlink_metadata(&path) {
         if !metadata.is_file() || metadata.file_type().is_symlink() { return Err("녹음 파일 경로가 올바르지 않습니다.".into()); }
     }
@@ -398,7 +403,7 @@ fn checked_narration_path(dir: &Path, extension: &str) -> Result<PathBuf, String
 }
 
 #[tauri::command]
-fn save_scene_narration(project_path: String, scene_number: u32, mime_type: String, data_url: String) -> Result<String, String> {
+fn save_scene_narration(project_path: String, scene_number: u32, mime_type: String, data_url: String, file_id: Option<String>) -> Result<String, String> {
     let extension = narration_extension(&mime_type)?;
     let dir = narration_dir(&project_path, scene_number)?;
     let prefix = format!("data:{mime_type};base64,");
@@ -414,11 +419,11 @@ fn save_scene_narration(project_path: String, scene_number: u32, mime_type: Stri
         _ => false,
     };
     if !valid { return Err("녹음 파일 내용이 올바르지 않습니다.".into()); }
-    let path = checked_narration_path(&dir, extension)?;
+    let path = checked_narration_path(&dir, extension, file_id.as_deref())?;
     fs::write(&path, bytes).map_err(|error| error.to_string())?;
     for old_extension in ["mp3", "wav", "m4a", "mp4", "webm"] {
-        if old_extension != extension {
-            let old = checked_narration_path(&dir, old_extension)?;
+        if file_id.is_none() && old_extension != extension {
+            let old = checked_narration_path(&dir, old_extension, None)?;
             if old.is_file() { fs::remove_file(old).map_err(|error| error.to_string())?; }
         }
     }
@@ -426,19 +431,25 @@ fn save_scene_narration(project_path: String, scene_number: u32, mime_type: Stri
 }
 
 #[tauri::command]
-fn read_scene_narration(project_path: String, scene_number: u32, mime_type: String) -> Result<String, String> {
+fn read_scene_narration(project_path: String, scene_number: u32, mime_type: String, file_id: Option<String>) -> Result<String, String> {
     let extension = narration_extension(&mime_type)?;
-    let path = checked_narration_path(&narration_dir(&project_path, scene_number)?, extension)?;
+    let path = checked_narration_path(&narration_dir(&project_path, scene_number)?, extension, file_id.as_deref())?;
     let bytes = fs::read(path).map_err(|error| error.to_string())?;
     if bytes.len() > 30_000_000 { return Err("녹음 파일이 너무 큽니다.".into()); }
     Ok(STANDARD.encode(bytes))
 }
 
 #[tauri::command]
-fn remove_scene_narration(project_path: String, scene_number: u32) -> Result<(), String> {
+fn remove_scene_narration(project_path: String, scene_number: u32, file_id: Option<String>, mime_type: Option<String>) -> Result<(), String> {
     let dir = narration_dir(&project_path, scene_number)?;
+    if let Some(id) = file_id.as_deref() {
+        let extension = narration_extension(mime_type.as_deref().ok_or("녹음 형식이 없습니다.")?)?;
+        let path = checked_narration_path(&dir, extension, Some(id))?;
+        if path.is_file() { fs::remove_file(path).map_err(|error| error.to_string())?; }
+        return Ok(());
+    }
     for extension in ["mp3", "wav", "m4a", "mp4", "webm"] {
-        let path = checked_narration_path(&dir, extension)?;
+        let path = checked_narration_path(&dir, extension, None)?;
         if path.is_file() { fs::remove_file(path).map_err(|error| error.to_string())?; }
     }
     Ok(())

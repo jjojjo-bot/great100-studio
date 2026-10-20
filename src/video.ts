@@ -2,12 +2,13 @@ import { getBackgroundMusic, getSceneNarration, getSceneVideo } from "./platform
 import { openSceneVideo } from "./scene-video";
 import { reportForProject } from "./app-data";
 import { refreshCloudPreviews } from "./cloud";
+import { ensureAacSupport } from "./aac";
+import { ENDING_DURATION, frameTimeline, milliseconds, OPENING_DURATION, projectTimeline, segmentProgress, snapToFrame, VIDEO_FPS } from "./timeline";
 import type { CaptionBlock, ImageCandidate, ImageMotion, ProjectData, Scene } from "./types";
 
 export const VIDEO_WIDTH = 1280;
 export const VIDEO_HEIGHT = 720;
-export const VIDEO_FPS = 15;
-export const OPENING_DURATION = 3;
+export { OPENING_DURATION, VIDEO_FPS } from "./timeline";
 
 export interface VideoSegment {
   title: string;
@@ -61,18 +62,21 @@ export function buildSceneSegment(project: ProjectData, scene: Scene, index: num
   if (!image) throw new Error(`Scene ${String(scene.number).padStart(2, "0")}의 이미지 또는 동영상을 선택해 주세요.`);
   const support = scene.support_candidates?.find((candidate) => candidate.id === scene.support_selected_candidate_id);
   if (scene.support_selected_candidate_id && !support) throw new Error(`Scene ${String(scene.number).padStart(2, "0")}의 선택한 보조 이미지를 찾지 못했습니다.`);
-  const duration = scene.duration ?? 10;
-  if (!Number.isFinite(duration) || duration < 1 || duration > 120) throw new Error(`Scene ${scene.number}의 길이는 1~120초여야 합니다.`);
+  const originalDuration = scene.duration ?? 10;
+  if (!Number.isFinite(originalDuration) || originalDuration < 1 || originalDuration > 120) throw new Error(`Scene ${scene.number}의 길이는 1~120초여야 합니다.`);
+  const entry = projectTimeline(project).scenes.find(item => item.scene.id === scene.id)!;
+  const duration = entry.duration;
+  const boundary = (seconds: number) => Math.max(0, Math.min(duration, snapToFrame(seconds)));
   const intro = image.media_type === "video" ? resolveVideoIntroImage(scene) : undefined;
   const timing = sceneTiming(scene, image.media_type === "video" ? image.duration_sec : undefined, !!intro, !!support);
   return { title: scene.title, sceneId: scene.id, caption: project.schema_version === "2.1" ? scene.narration || "" : scene.caption ?? scene.title,
-    timedCaptions: project.schema_version === "2.1" ? scene.captions?.map((block) => ({ ...block, start_sec: block.start_sec - (scene.start_sec || 0), end_sec: block.end_sec - (scene.start_sec || 0) })) : undefined,
+    timedCaptions: project.schema_version === "2.1" ? scene.captions?.map((block) => ({ ...block, start_sec: boundary((milliseconds(block.start_sec) - entry.sourceStartMs) / 1000), end_sec: boundary((milliseconds(block.end_sec) - entry.sourceStartMs) / 1000) })) : undefined,
     emphasisSubtitle: project.schema_version === "2.1" ? scene.subtitle : undefined,
     imageUrl: intro?.preview_url || image.preview_url, videoCandidateId: image.media_type === "video" ? image.id : undefined,
-    videoIntroDuration: intro ? timing.intro : undefined,
+    videoIntroDuration: intro ? Math.min(duration - 1 / VIDEO_FPS, boundary(timing.intro)) : undefined,
     videoTrimStart: image.media_type === "video" ? timing.trimStart : undefined,
     videoTrimEnd: image.media_type === "video" ? timing.trimEnd : undefined,
-    supportImageUrl: support?.preview_url, supportStartsAt: timing.supportStart,
+    supportImageUrl: support?.preview_url, supportStartsAt: timing.supportStart === undefined ? undefined : boundary(timing.supportStart),
     duration, motion: resolveImageMotion(scene.motion, index), musicVolume: sceneMusicVolume(scene.music_volume) };
 }
 
@@ -84,13 +88,13 @@ export function buildVideoPlan(project: ProjectData): VideoSegment[] {
   const thumbnail = project.thumbnail.candidates.find((candidate) => candidate.id === project.thumbnail.selected_candidate_id);
   if (project.thumbnail.selected_candidate_id && !thumbnail) throw new Error("선택한 썸네일 이미지를 찾지 못했습니다.");
   const hasEnding = !!project.ending_message.trim() || !!thumbnail;
-  const total = OPENING_DURATION + scenes.reduce((sum, scene) => sum + scene.duration, 0) + (hasEnding ? 4 : 0);
+  const total = projectTimeline(project).totalDuration;
   if (total > 900) throw new Error("영상 길이는 15분 이하로 설정해 주세요.");
   const openingShare = OPENING_DURATION / (OPENING_DURATION + scenes[0].duration);
   scenes[0].motionStart = openingShare;
   const opening: VideoSegment = { title: "오프닝", caption: "", imageUrl: scenes[0].imageUrl, duration: OPENING_DURATION,
     motion: scenes[0].motion, motionEnd: openingShare, musicVolume: scenes[0].musicVolume, opening: true };
-  if (hasEnding) scenes.push({ title: "엔딩", caption: project.ending_message.trim(), imageUrl: thumbnail?.preview_url, duration: 4, motion: "none", musicVolume: scenes.at(-1)?.musicVolume ?? 45, ending: true });
+  if (hasEnding) scenes.push({ title: "엔딩", caption: project.ending_message.trim(), imageUrl: thumbnail?.preview_url, duration: ENDING_DURATION, motion: "none", musicVolume: scenes.at(-1)?.musicVolume ?? 45, ending: true });
   return [opening, ...scenes];
 }
 
@@ -98,11 +102,9 @@ type MusicSection = Pick<VideoSegment, "duration" | "musicVolume">;
 type MusicInterval = { start: number; end: number; volume: number; nextVolume?: number };
 
 function musicTimeline(sections: MusicSection[]): MusicInterval[] {
-  let start = 0;
+  const ranges = frameTimeline(sections.map(section => section.duration), true);
   return sections.map((section, index) => {
-    const interval = { start, end: start + section.duration, volume: section.musicVolume / 100, nextVolume: sections[index + 1]?.musicVolume === undefined ? undefined : sections[index + 1].musicVolume / 100 };
-    start = interval.end;
-    return interval;
+    return { start: ranges[index].start, end: ranges[index].end, volume: section.musicVolume / 100, nextVolume: sections[index + 1]?.musicVolume === undefined ? undefined : sections[index + 1].musicVolume / 100 };
   });
 }
 
@@ -352,7 +354,7 @@ async function loadImage(url: string): Promise<HTMLImageElement> {
 export async function renderProjectMp4(project: ProjectData, onProgress: (percent: number) => void = () => {}): Promise<Blob> {
   if (project.cloud_owner_id) project = await refreshCloudPreviews(project);
   const plan = buildVideoPlan(project);
-  const { AudioBufferSource, BufferTarget, CanvasSource, Mp4OutputFormat, Output, Quality, canEncodeAudio, canEncodeVideo } = await import("mediabunny");
+  const { AudioBufferSource, BufferTarget, CanvasSource, Mp4OutputFormat, Output, Quality, canEncodeVideo } = await import("mediabunny");
   if (!(await canEncodeVideo("avc", { width: VIDEO_WIDTH, height: VIDEO_HEIGHT, frameRate: VIDEO_FPS }))) {
     throw new Error("이 브라우저는 MP4 인코딩을 지원하지 않습니다. 최신 Chrome 또는 Edge에서 다시 시도해 주세요.");
   }
@@ -365,7 +367,8 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
   const output = new Output({ format: new Mp4OutputFormat(), target });
   const source = new CanvasSource(canvas, { codec: "avc", quality: new Quality("medium") });
   output.addVideoTrack(source);
-  const frameCounts = plan.map((segment) => Math.max(1, Math.round(segment.duration * VIDEO_FPS)));
+  const ranges = frameTimeline(plan.map(segment => segment.duration), true);
+  const frameCounts = ranges.map(range => range.frames);
   const captions = plan.map((segment) => captionParts(segment.caption));
   const totalFrames = frameCounts.reduce((sum, count) => sum + count, 0);
   const timeline = musicTimeline(plan);
@@ -386,8 +389,7 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
           : await audioContext.decodeAudioData(await musicBlob.arrayBuffer());
         music = decodedAudio(buffer);
       }
-      let start = 0;
-      for (const segment of plan) {
+      for (const [index, segment] of plan.entries()) {
         const scene = segment.sceneId ? project.scenes.find((item) => item.id === segment.sceneId) : undefined;
         if (scene?.narration_audio) {
           const blob = await getSceneNarration(project, scene);
@@ -397,20 +399,22 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
             : await audioContext.decodeAudioData(await blob.arrayBuffer());
           const audio = decodedAudio(buffer);
           if (audio.duration > segment.duration + 0.15) throw new Error(`Scene ${scene.number} 녹음이 장면 길이보다 깁니다. 다시 녹음해 주세요.`);
-          narrations.push({ start, end: start + segment.duration, audio });
+          narrations.push({ start: ranges[index].start, end: ranges[index].end, audio });
         }
-        start += segment.duration;
       }
     }
     catch (error) { await audioContext.close(); throw error; }
-    audioSampleRate = audioContext.sampleRate || music?.sampleRate || narrations[0]?.audio.sampleRate || 48_000;
-    audioChannels = Math.max(music?.channels.length || 0, ...narrations.map((clip) => clip.audio.channels.length));
-    if (!audioChannels || !(await canEncodeAudio("aac", { numberOfChannels: audioChannels, sampleRate: audioSampleRate }))) {
-      await audioContext.close();
-      throw new Error("이 브라우저는 오디오가 포함된 MP4 인코딩을 지원하지 않습니다. 최신 Chrome 또는 Edge에서 다시 시도해 주세요.");
+    try {
+      audioSampleRate = audioContext.sampleRate || music?.sampleRate || narrations[0]?.audio.sampleRate || 48_000;
+      audioChannels = Math.max(music?.channels.length || 0, ...narrations.map((clip) => clip.audio.channels.length));
+      if (!audioChannels || !(await ensureAacSupport(audioChannels, audioSampleRate))) {
+        throw new Error("이 브라우저는 오디오가 포함된 MP4 인코딩을 지원하지 않습니다. 최신 Chrome 또는 Edge에서 다시 시도해 주세요.");
+      }
+      audioSource = new AudioBufferSource({ codec: "aac", quality: new Quality("medium") });
+      output.addAudioTrack(audioSource);
+    } catch (error) {
+      await audioContext.close(); throw error;
     }
-    audioSource = new AudioBufferSource({ codec: "aac", quality: new Quality("medium") });
-    output.addAudioTrack(audioSource);
   }
   try {
     await output.start();
@@ -455,8 +459,8 @@ export async function renderProjectMp4(project: ProjectData, onProgress: (percen
           videoFrames = video.sink.canvasesAtTimestamps(timestamps)[Symbol.asyncIterator]();
         }
       for (let localFrame = 0; localFrame < frameCounts[segmentIndex]; localFrame++) {
-        const progress = frameCounts[segmentIndex] === 1 ? 0 : localFrame / (frameCounts[segmentIndex] - 1);
         const seconds = localFrame / VIDEO_FPS;
+        const progress = segmentProgress(seconds, segment.duration);
         const part = segment.timedCaptions ? activeTimedCaption(segment.timedCaptions, seconds) : captions[segmentIndex][Math.min(captions[segmentIndex].length - 1, Math.floor(progress * captions[segmentIndex].length))];
         const supportStart = segment.supportStartsAt ?? Infinity;
         const fadeDuration = Math.min(0.6, segment.duration / 8);

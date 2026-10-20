@@ -1,5 +1,5 @@
 import { cloudAccessToken, getCloudSession, type CloudSession } from "./cloud-session";
-import { assertEditorWrite, readEditorProject } from "./editor-format";
+import { assertEditorWrite, prepareEditorWrite, readEditorProject } from "./editor-format";
 import { withFullImagePrompts } from "./prompts";
 import type { ImageCandidate, ProjectData } from "./types";
 
@@ -132,6 +132,7 @@ export async function createCloudProject(draft: ProjectData): Promise<ProjectDat
 
 // Serialize writes per account/project so normal rapid typing cannot race its own version.
 export async function saveCloudProject(project: ProjectData): Promise<void> {
+  project = prepareEditorWrite(project);
   assertEditorWrite(project);
   const context = requireContext(project);
   const snapshot = withFullImagePrompts(structuredClone(readEditorProject(project)));
@@ -156,7 +157,8 @@ export async function saveCloudProject(project: ProjectData): Promise<void> {
     }
     // Never persist temporary signed URLs or UI-only revision fields in JSONB.
     const { cloud_owner_id: _owner, cloud_version: _version, ...data } = snapshot;
-    const result = await context.client.rpc("great100_save_editor_project", { p_id: snapshot.id, p_data: data, p_expected_version: expected });
+    const rpc = (snapshot.editor_version ?? 0) >= 2 ? "great100_save_timed_project" : "great100_save_editor_project";
+    const result = await context.client.rpc(rpc, { p_id: snapshot.id, p_data: data, p_expected_version: expected });
     if (result.error) throw databaseError(result.error);
     const row = (result.data as ProjectRow[])[0];
     if (!row) throw new Error("저장 결과를 확인하지 못했습니다.");

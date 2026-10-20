@@ -4,17 +4,17 @@ import JSZip from "jszip";
 import { MAX_MUSIC_BYTES, MAX_MUSIC_SECONDS } from "./music-limits";
 import { composeScenePrompt, composeThumbnailPrompt, withFullImagePrompts } from "./prompts";
 import { inspectSceneVideo, validateSceneVideoFile } from "./scene-video";
-import { cloudContext, createCloudProject, deleteCloudProject, downloadCloudFile, getCloudRenderedVideo, listCloudProjects, nextCloudEpisode, readCloudProject, saveCloudProject, saveCloudRenderedVideo, uploadCloudFile } from "./cloud";
+import { cloudContext, createCloudProject, deleteCloudProject, deleteCloudFile, downloadCloudFile, getCloudRenderedVideo, listCloudProjects, nextCloudEpisode, readCloudProject, saveCloudProject, saveCloudRenderedVideo, uploadCloudFile } from "./cloud";
 import { cloudAccessToken } from "./cloud-session";
 import { detectImageFormat } from "./image-format";
 import { prepareReferenceImage } from "./reference-image";
-import { assertEditorWrite, readEditorProject } from "./editor-format";
+import { assertEditorWrite, prepareEditorWrite, readEditorProject } from "./editor-format";
 import type { BackgroundMusic, GenerateRequest, ImageCandidate, ProjectData, Scene, SceneNarrationAudio, VisualAsset } from "./types";
 
 export { detectImageFormat } from "./image-format";
 
 export const isTauri = () => "__TAURI_INTERNALS__" in window;
-const VIDEO_RENDER_VERSION = 8;
+const VIDEO_RENDER_VERSION = 9;
 
 const database = () => new Promise<IDBPDatabase>((resolve, reject) => {
   let blocked = false;
@@ -202,6 +202,7 @@ export async function createNumberedProject(draft: ProjectData): Promise<Project
 }
 
 export async function saveProject(project: ProjectData): Promise<void> {
+  project = prepareEditorWrite(project);
   assertEditorWrite(project);
   const complete = withFullImagePrompts(readEditorProject(project));
   if (isTauri()) return invoke("save_project", { project: complete });
@@ -211,8 +212,8 @@ export async function saveProject(project: ProjectData): Promise<void> {
   try {
     const stored = await tx.objectStore("projects").get(project.id) as ProjectData | undefined;
     assertEditorWrite(project, stored);
-    if (stored && !stored.editor_version) {
-      const key = `editor-backup:${project.id}:0`;
+    if (stored && (stored.editor_version ?? 0) < (project.editor_version ?? 0)) {
+      const key = `editor-backup:${project.id}:${stored.editor_version ?? 0}`;
       if (!await tx.objectStore("settings").get(key)) await tx.objectStore("settings").put(stored, key);
     }
     await tx.objectStore("projects").put(complete);
@@ -237,7 +238,7 @@ export async function deleteProject(project: ProjectData): Promise<string | unde
   const media = tx.objectStore("media");
   const narrationKeys = (await audio.getAllKeys()).filter((key) => typeof key === "string" && key.startsWith(`${project.id}:narration:`));
   const mediaKeys = (await media.getAllKeys()).filter((key) => typeof key === "string" && key.startsWith(`${project.id}:scene-video:`));
-  await Promise.all([tx.objectStore("projects").delete(project.id), tx.objectStore("videos").delete(project.id), tx.objectStore("settings").delete(`editor-backup:${project.id}:0`), audio.delete(project.id), ...narrationKeys.map((key) => audio.delete(key)), ...mediaKeys.map((key) => media.delete(key))]);
+  await Promise.all([tx.objectStore("projects").delete(project.id), tx.objectStore("videos").delete(project.id), ...[0, 1].map(version => tx.objectStore("settings").delete(`editor-backup:${project.id}:${version}`)), audio.delete(project.id), ...narrationKeys.map((key) => audio.delete(key)), ...mediaKeys.map((key) => media.delete(key))]);
   await tx.done;
 }
 
@@ -318,7 +319,7 @@ export async function removeBackgroundMusic(project: ProjectData): Promise<void>
 const NARRATION_FORMATS: Record<string, string> = {
   mp3: "audio/mpeg", wav: "audio/wav", m4a: "audio/mp4", mp4: "video/mp4", webm: "audio/webm",
 };
-const narrationKey = (project: ProjectData, scene: Scene) => `${project.id}:narration:${scene.id}`;
+const narrationKey = (project: ProjectData, scene: Scene, id = scene.narration_audio?.id) => `${project.id}:narration:${scene.id}${id ? `:${id}` : ""}`;
 
 export function detectNarrationFormat(file: Pick<File, "name" | "type" | "size">): { extension: string; mime: string } {
   if (!file.size || file.size > 30_000_000) throw new Error("씬 녹음은 30MB 이하 파일만 사용할 수 있습니다.");
@@ -332,20 +333,32 @@ export function detectNarrationFormat(file: Pick<File, "name" | "type" | "size">
   return { extension, mime };
 }
 
-export async function saveSceneNarration(project: ProjectData, scene: Scene, file: File): Promise<SceneNarrationAudio> {
+export interface PreparedNarration { file: File; extension: string; mime: string; duration: number }
+
+export async function inspectSceneNarration(file: File): Promise<PreparedNarration> {
   const { extension, mime } = detectNarrationFormat(file);
-  const audioContext = new AudioContext();
-  let duration = 0;
-  try {
-    duration = extension === "mp4" || extension === "m4a"
-      ? await (await import("./music")).inspectMpeg4Audio(file)
-      : (await audioContext.decodeAudioData(await file.arrayBuffer())).duration;
-  } catch { throw new Error("녹음 파일을 읽지 못했습니다. 다른 파일을 선택해 주세요."); }
-  finally { await audioContext.close(); }
+  let duration: number;
+  if (extension === "mp4" || extension === "m4a") {
+    try { duration = await (await import("./music")).inspectMpeg4Audio(file); }
+    catch { throw new Error("녹음 파일을 읽지 못했습니다. 다른 파일을 선택해 주세요."); }
+  } else {
+    const audioContext = new AudioContext();
+    try { duration = (await audioContext.decodeAudioData(await file.arrayBuffer())).duration; }
+    catch { throw new Error("녹음 파일을 읽지 못했습니다. 다른 파일을 선택해 주세요."); }
+    finally { await audioContext.close(); }
+  }
+  if (!Number.isFinite(duration) || duration <= 0 || duration > 120) throw new Error("녹음 길이는 0초 초과, 120초 이하여야 합니다.");
+  return { file, extension, mime, duration };
+}
+
+export async function savePreparedNarration(project: ProjectData, scene: Scene, prepared: PreparedNarration): Promise<SceneNarrationAudio> {
+  const { file, extension, mime, duration } = prepared;
+  detectNarrationFormat(file);
   const sceneDuration = scene.duration ?? 10;
-  if (!Number.isFinite(duration) || duration <= 0) throw new Error("녹음 길이를 확인할 수 없습니다.");
-  if (duration > sceneDuration + 0.15) throw new Error(`녹음이 장면 길이(${sceneDuration}초)보다 깁니다. ${duration.toFixed(1)}초 녹음을 짧게 다시 만들거나 장면 시간을 조정해 주세요.`);
-  const narration = { name: file.name, mime_type: mime, path: `${project.project_path}/03_images/scene${String(scene.number).padStart(2, "0")}/narration.${extension}`, duration_sec: duration };
+  if (!Number.isFinite(duration) || duration <= 0 || duration > 120) throw new Error("녹음 길이를 확인할 수 없습니다.");
+  if (duration > sceneDuration + 0.15) throw new Error(`녹음이 장면 길이(${sceneDuration}초)보다 깁니다. 녹음 길이에 맞추기를 적용해 주세요.`);
+  const id = crypto.randomUUID();
+  const narration = { id, name: file.name, mime_type: mime, path: `${project.project_path}/03_images/scene${String(scene.number).padStart(2, "0")}/narration_${id}.${extension}`, duration_sec: duration };
   if (!isTauri() && cloudContext(project)) return { ...narration, storage_key: await uploadCloudFile(project.id, new Blob([file], { type: mime })) };
   if (isTauri()) {
     const dataUrl = await new Promise<string>((resolve, reject) => {
@@ -354,12 +367,28 @@ export async function saveSceneNarration(project: ProjectData, scene: Scene, fil
       reader.onerror = () => reject(new Error("녹음 파일을 읽지 못했습니다."));
       reader.readAsDataURL(file);
     });
-    await invoke("save_scene_narration", { projectPath: project.project_path, sceneNumber: scene.number, mimeType: mime, dataUrl: `data:${mime};base64,${dataUrl.slice(dataUrl.indexOf(",") + 1)}` });
+    await invoke("save_scene_narration", { projectPath: project.project_path, sceneNumber: scene.number, mimeType: mime, fileId: id, dataUrl: `data:${mime};base64,${dataUrl.slice(dataUrl.indexOf(",") + 1)}` });
   } else {
     const db = await database();
-    await db.put("audio", { id: narrationKey(project, scene), blob: file });
+    await db.put("audio", { id: narrationKey(project, scene, id), blob: file });
   }
   return narration;
+}
+
+export async function saveSceneNarration(project: ProjectData, scene: Scene, file: File): Promise<SceneNarrationAudio> {
+  return savePreparedNarration(project, scene, await inspectSceneNarration(file));
+}
+
+export async function discardSceneNarration(project: ProjectData, scene: Scene, narration: SceneNarrationAudio): Promise<void> {
+  if (!narration.id) return;
+  if (!isTauri() && cloudContext(project)) {
+    if (narration.storage_key) await deleteCloudFile(project, narration.storage_key);
+  } else if (isTauri()) {
+    await invoke("remove_scene_narration", { projectPath: project.project_path, sceneNumber: scene.number, fileId: narration.id, mimeType: narration.mime_type });
+  } else {
+    const db = await database();
+    await db.delete("audio", narrationKey(project, scene, narration.id));
+  }
 }
 
 export async function getSceneNarration(project: ProjectData, scene: Scene): Promise<Blob | null> {
@@ -369,7 +398,7 @@ export async function getSceneNarration(project: ProjectData, scene: Scene): Pro
     return downloadCloudFile(project, scene.narration_audio.storage_key);
   }
   if (isTauri()) {
-    const encoded = await invoke<string>("read_scene_narration", { projectPath: project.project_path, sceneNumber: scene.number, mimeType: scene.narration_audio.mime_type });
+    const encoded = await invoke<string>("read_scene_narration", { projectPath: project.project_path, sceneNumber: scene.number, mimeType: scene.narration_audio.mime_type, fileId: scene.narration_audio.id });
     return await (await fetch(`data:${scene.narration_audio.mime_type};base64,${encoded}`)).blob();
   }
   const db = await database();
@@ -379,7 +408,7 @@ export async function getSceneNarration(project: ProjectData, scene: Scene): Pro
 
 export async function removeSceneNarration(project: ProjectData, scene: Scene): Promise<void> {
   if (!isTauri() && cloudContext(project)) return;
-  if (isTauri()) await invoke("remove_scene_narration", { projectPath: project.project_path, sceneNumber: scene.number });
+  if (isTauri()) await invoke("remove_scene_narration", { projectPath: project.project_path, sceneNumber: scene.number, fileId: scene.narration_audio?.id, mimeType: scene.narration_audio?.mime_type });
   else {
     const db = await database();
     await db.delete("audio", narrationKey(project, scene));
@@ -590,6 +619,7 @@ export async function buildProjectZip(project: ProjectData, video?: Blob): Promi
     const narration = await getSceneNarration(project, scene);
     if (!narration) throw new Error(`Scene ${scene.number} 녹음 파일을 찾지 못했습니다.`);
     root.file(`03_images/scene${String(scene.number).padStart(2, "0")}/narration.${scene.narration_audio.path.split(".").at(-1)}`, narration);
+    if (scene.narration_audio.id) root.file(`03_images/scene${String(scene.number).padStart(2, "0")}/narration_${scene.narration_audio.id}.${scene.narration_audio.path.split(".").at(-1)}`, narration);
   }
   const withoutPreviews = structuredClone(withFullImagePrompts(project));
   for (const asset of [withoutPreviews.anchor, withoutPreviews.thumbnail, ...withoutPreviews.scenes]) {

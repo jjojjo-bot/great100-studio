@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { getBackgroundMusic, getSceneNarration, getSceneVideo } from "./platform";
 import { activeTimedCaption, buildSceneSegment, buildVideoPlan, captionParts, drawFrame, musicGainAtTime, VIDEO_HEIGHT, VIDEO_WIDTH, type VideoSegment } from "./video";
 import type { ProjectData } from "./types";
+import { frameTimeline, playbackPosition, segmentProgress, snapToFrame } from "./timeline";
 
 type Media = { image: HTMLImageElement | null; support: HTMLImageElement | null; video: HTMLVideoElement | null; narration: HTMLAudioElement | null };
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
@@ -21,10 +22,10 @@ export function FullVideoPreview({ project, sceneId, seekRequest, onPositionChan
     return { plan: scene ? [buildSceneSegment(project, scene, Math.max(0, scene.number - 1))] : buildVideoPlan(project), error: "" };
   } catch (error) { return { plan: [] as VideoSegment[], error: String(error) }; } }, [project, sceneId]);
   const plan = planResult.plan;
-  const total = plan.reduce((sum, segment) => sum + segment.duration, 0);
+  const total = frameTimeline(plan.map(segment => segment.duration), true).at(-1)?.end ?? 0;
   const mediaKey = useMemo(() => JSON.stringify({ project: project.id, sceneId, music: project.background_music?.path, assets: plan.map((segment) => {
     const scene = project.scenes.find((item) => item.id === segment.sceneId);
-    return [segment.imageUrl, segment.supportImageUrl, segment.videoCandidateId, scene?.narration_audio?.path];
+    return [segment.imageUrl, segment.supportImageUrl, segment.videoCandidateId, scene?.narration_audio?.path, scene?.narration_audio?.storage_key];
   }) }), [project, sceneId, plan]);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const mediaRef = useRef<Media[]>([]);
@@ -49,14 +50,13 @@ export function FullVideoPreview({ project, sceneId, seekRequest, onPositionChan
   const renderAt = (time: number) => {
     const ctx = canvasRef.current?.getContext("2d");
     if (!ctx || !mediaRef.current.length) return;
-    let start = 0;
-    let index = plan.length - 1;
-    for (let i = 0; i < plan.length; i++) { if (time < start + plan[i].duration || i === plan.length - 1) { index = i; break; } start += plan[i].duration; }
+    const location = playbackPosition(plan.map(segment => segment.duration), time);
+    if (!location) return;
+    const { index, seconds } = location;
     const segment = plan[index];
     const media = mediaRef.current[index];
     if (!media) return;
-    const seconds = clamp(time - start, 0, segment.duration);
-    const progress = segment.duration ? seconds / segment.duration : 0;
+    const progress = segmentProgress(seconds, segment.duration);
     let visual: HTMLImageElement | HTMLVideoElement | null = media.image;
     if (media.video && seconds >= (segment.videoIntroDuration ?? 0)) {
       const videoTime = clamp((segment.videoTrimStart ?? 0) + seconds - (segment.videoIntroDuration ?? 0), 0, Math.max(0, (segment.videoTrimEnd ?? media.video.duration) - 0.02));
@@ -71,8 +71,8 @@ export function FullVideoPreview({ project, sceneId, seekRequest, onPositionChan
     const supportOpacity = media.support ? clamp((seconds - supportStart) / Math.min(0.6, segment.duration / 8), 0, 1) : 0;
     const supportProgress = media.support ? clamp((seconds - supportStart) / Math.max(0.01, segment.duration - supportStart), 0, 1) : 0;
     const motionProgress = (segment.motionStart ?? 0) + progress * ((segment.motionEnd ?? 1) - (segment.motionStart ?? 0));
-    const introOpacity = media.video && media.image && seconds >= (segment.videoIntroDuration ?? 0) ? clamp(1 - (seconds - (segment.videoIntroDuration ?? 0)) / 0.3, 0, 1) : 0;
-    drawFrame(ctx, visual, caption, motionProgress, project.person, segment.motion, segment.emphasisSubtitle && seconds < 3 ? segment.emphasisSubtitle : "", seconds, media.support, supportOpacity, supportProgress, segment.opening ? clamp((segment.duration - seconds) / 0.8, 0, 1) : 0, !!segment.ending, index === 1 ? clamp(seconds / 0.5, 0, 1) : 1, introOpacity ? media.image : null, introOpacity);
+    const introOpacity = media.video && media.image && seconds >= (segment.videoIntroDuration ?? 0) ? clamp(1 - (seconds - (segment.videoIntroDuration ?? 0)) / snapToFrame(0.3), 0, 1) : 0;
+    drawFrame(ctx, visual, caption, motionProgress, project.person, segment.motion, segment.emphasisSubtitle && seconds < 3 ? segment.emphasisSubtitle : "", seconds, media.support, supportOpacity, supportProgress, segment.opening ? clamp((1 - progress) * segment.duration / 0.8, 0, 1) : 0, !!segment.ending, index === 1 ? clamp(seconds / 0.5, 0, 1) : 1, introOpacity ? media.image : null, introOpacity);
     mediaRef.current.forEach((item, itemIndex) => {
       if (!item.narration) return;
       if (itemIndex === index && seconds < item.narration.duration && playingRef.current) {
@@ -143,6 +143,16 @@ export function FullVideoPreview({ project, sceneId, seekRequest, onPositionChan
   }, [mediaKey]);
 
   useEffect(() => { if (ready && plan.length) renderRef.current(positionRef.current); }, [plan, ready]);
+
+  const timingKey = plan.map(segment => segment.duration).join(",");
+  useEffect(() => {
+    playingRef.current = false; setPlaying(false); cancelAnimationFrame(rafRef.current);
+    musicRef.current?.pause();
+    mediaRef.current.forEach(item => { item.narration?.pause(); item.video?.pause(); });
+    const next = Math.min(positionRef.current, total);
+    positionRef.current = next; setPosition(next); reportPosition(next, true);
+    if (ready && plan.length) renderRef.current(next);
+  }, [timingKey]);
 
   const seek = (time: number) => {
     positionRef.current = clamp(time, 0, total);

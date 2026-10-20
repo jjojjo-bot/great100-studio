@@ -1,5 +1,6 @@
 import { DEFAULT_STYLE } from "./parser";
 import { editorIdentityErrors, isCoreScene, readEditorProject } from "./editor-format";
+import { projectTimeline } from "./timeline";
 import type { AppDataV2, ImageMotion, ProjectData, Scene, VisualAsset } from "./types";
 
 export interface QualityReport {
@@ -226,6 +227,7 @@ export function reportForProject(project: ProjectData): QualityReport {
     subtitle: scene.subtitle ?? scene.caption as string, captions: scene.captions, motion: scene.motion || "auto",
   })) };
   const report = validateData(data, true, project.scenes.filter(scene => isCoreScene(project, scene)).map(scene => scene.id));
+  try { report.metrics.duration = projectTimeline(project).bodyDuration; } catch { /* Existing validation reports invalid durations. */ }
   if (Array.isArray(project.editor?.core_scene_ids) && project.editor.core_scene_ids.some(id => !project.scenes.some(scene => scene.id === id))) identityErrors.push("핵심 업적의 편집 장면 연결이 존재하지 않습니다.");
   for (const scene of project.scenes) if (Number.isFinite(scene.start_sec) && Number.isFinite(scene.end_sec) && Math.abs((scene.end_sec! - scene.start_sec!) - (scene.duration ?? 10)) > 0.001) identityErrors.push(`Scene ${scene.number}의 장면 길이와 시작·종료 시간이 일치하지 않습니다.`);
   return { ...report, errors: [...identityErrors, ...report.errors] };

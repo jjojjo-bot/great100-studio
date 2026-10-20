@@ -1,12 +1,12 @@
 import type { ProjectData } from "./types";
 
-export interface EditOptions { history?: boolean; base?: ProjectData }
+export interface EditOptions { history?: boolean; base?: ProjectData; label?: string }
 type Target = { kind: "project" | "anchor" | "thumbnail" | "scene"; id?: string };
 type Patch = { target: Target; field: string; before: unknown; after: unknown };
 type Entry = { group: number; label: string; patches: Patch[] };
 export type HistoryResult = { status: "empty" | "conflict" } | { status: "applied"; project: ProjectData };
 
-const sceneFields = ["subtitle", "title", "caption", "captions", "prompt", "duration", "motion", "music_volume", "video_intro_candidate_id", "video_intro_duration_sec", "video_trim_start_sec", "video_trim_end_sec", "support_start_sec", "selected_candidate_id", "support_selected_candidate_id", "support_image_prompt"];
+const sceneFields = ["subtitle", "title", "caption", "captions", "prompt", "duration", "start_sec", "end_sec", "motion", "music_volume", "video_intro_candidate_id", "video_intro_duration_sec", "video_trim_start_sec", "video_trim_end_sec", "support_start_sec", "selected_candidate_id", "support_selected_candidate_id", "support_image_prompt"];
 const labels: Record<string, string> = {
   subtitle: "강조 자막", title: "장면 제목", caption: "영상 자막", captions: "자막 문구·시간", prompt: "이미지 프롬프트",
   duration: "장면 길이", motion: "이미지 효과", music_volume: "음악 볼륨", selected_candidate_id: "후보 선택",
@@ -75,7 +75,8 @@ export class EditorHistory {
     this.future = this.future.filter(entry => entry.patches.every(patch => referencesExist(project, patch)));
   }
 
-  record(before: ProjectData, after: ProjectData) {
+  record(before: ProjectData, after: ProjectData, label?: string) {
+    if (label) this.breakGroup();
     this.reset(after.id);
     if (!same(before.scenes.map(scene => scene.id), after.scenes.map(scene => scene.id))) { this.reset(after.id, true); return; }
     this.reconcile(after);
@@ -89,9 +90,10 @@ export class EditorHistory {
       previous.patches = patches.map((patch, index) => ({ ...patch, before: previous.patches[index].before }));
       if (previous.patches.every(patch => same(patch.before, patch.after))) this.past.pop();
     } else {
-      this.past.push({ group: this.group, label: labels[patches[0].field] || "편집", patches });
+      this.past.push({ group: this.group, label: label || labels[patches[0].field] || "편집", patches });
       if (this.past.length > 50) this.past.shift();
     }
+    if (label) this.breakGroup();
   }
 
   undo(project: ProjectData) { return this.move(project, "before"); }

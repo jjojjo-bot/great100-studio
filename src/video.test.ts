@@ -50,7 +50,7 @@ describe("MP4 제작 계획", () => {
     ];
     scene.selected_candidate_id = "clip";
     expect(resolveVideoIntroImage(scene)?.id).toBe("second");
-    expect(buildVideoPlan(project)[1]).toMatchObject({ imageUrl: "second-url", videoCandidateId: "clip", videoIntroDuration: 1.5, duration: 8 });
+    expect(buildVideoPlan(project)[1]).toMatchObject({ imageUrl: "second-url", videoCandidateId: "clip", videoIntroDuration: 23 / 15, duration: 8 });
     scene.video_intro_candidate_id = "first";
     expect(buildVideoPlan(project)[1].imageUrl).toBe("first-url");
     scene.video_intro_candidate_id = null;
@@ -73,7 +73,7 @@ describe("MP4 제작 계획", () => {
     scene.support_candidates = [{ id: "support", path: "support.png", preview_url: "support", created_at: "now", mode: "uploaded" }];
     scene.support_selected_candidate_id = "support";
     scene.support_start_sec = 5.5;
-    expect(buildVideoPlan(project)[1]).toMatchObject({ videoIntroDuration: 2.5, videoTrimStart: 1.2, videoTrimEnd: 4.8, supportStartsAt: 5.5 });
+    expect(buildVideoPlan(project)[1]).toMatchObject({ videoIntroDuration: 38 / 15, videoTrimStart: 1.2, videoTrimEnd: 4.8, supportStartsAt: 83 / 15 });
     expect(sceneTiming({ ...scene, video_trim_start_sec: 9 }, 6, true, true).trimStart).toBe(5.9);
   });
 
@@ -120,7 +120,7 @@ describe("MP4 제작 계획", () => {
     scene.candidates = [{ id: "clip", path: "clip.mp4", preview_url: "poster", created_at: "now", mode: "uploaded", media_type: "video", duration_sec: 10 }];
     scene.selected_candidate_id = "clip";
     const segment = buildSceneSegment(project, scene, 0);
-    expect(segment.timedCaptions).toEqual([{ text: "여러분에게 하고 싶은 말이 있어요.", start_sec: 0, end_sec: 4.5 }]);
+    expect(segment.timedCaptions).toEqual([{ text: "여러분에게 하고 싶은 말이 있어요.", start_sec: 0, end_sec: 68 / 15 }]);
     expect(activeTimedCaption(segment.timedCaptions!, 3)).toBe("여러분에게 하고 싶은 말이 있어요.");
   });
 

@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-pub const EDITOR_VERSION: u64 = 1;
+pub const EDITOR_VERSION: u64 = 2;
 
 pub fn version(project: &Value) -> Result<u64, String> {
     match project.get("editor_version") {
@@ -18,7 +18,7 @@ pub fn check_write(project: &Value, stored: Option<&Value>) -> Result<(), String
         if version(previous)? > next {
             return Err("저장된 편집 형식이 더 최신입니다. 최신 작업을 다시 열어 주세요.".into());
         }
-        if next >= EDITOR_VERSION && (previous.get("source") != project.get("source")
+        if next >= 1 && (previous.get("source") != project.get("source")
             || previous.get("source_text") != project.get("source_text")) {
             return Err("원본 제작안은 변경할 수 없습니다. 새 프로젝트로 만들어 주세요.".into());
         }
@@ -42,7 +42,7 @@ mod tests {
         assert!(check_write(&legacy, Some(&round_trip)).is_err());
         edited["source"]["extra"] = json!(false);
         assert!(check_write(&edited, Some(&round_trip)).is_err());
-        edited["editor_version"] = json!(2);
+        edited["editor_version"] = json!(3);
         assert!(check_write(&edited, None).is_err());
     }
 }
