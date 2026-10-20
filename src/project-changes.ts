@@ -1,4 +1,4 @@
-import type { ProjectData } from "./types";
+import type { ProjectData, Scene } from "./types";
 
 const same = (left: unknown, right: unknown) => Object.is(left, right) || JSON.stringify(left) === JSON.stringify(right);
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
@@ -11,9 +11,21 @@ function merge(base: unknown, next: unknown, current: unknown, field = ""): unkn
       const before = new Map(base.map(value => [value.id, value]));
       const after = new Map(next.map(value => [value.id, value]));
       const result = current.filter(value => !before.has(value.id) || after.has(value.id))
-        .map(value => after.has(value.id) ? merge(before.get(value.id), after.get(value.id), value) : value);
+        .map(value => {
+          const edited = after.get(value.id);
+          if (!edited) return value;
+          return field === "scenes" ? mergeScene(before.get(value.id) as Scene | undefined, edited as Scene, value as Scene)
+            : merge(before.get(value.id), edited, value);
+        });
       const ids = new Set(result.map(value => (value as { id: string }).id));
       for (const value of next) if (!before.has(value.id) && !ids.has(value.id)) result.push(value);
+      // Only an explicit permutation changes scene order. A late callback whose
+      // scene order is unchanged from its base keeps the latest order intact.
+      if (field === "scenes" && base.length === next.length && next.every(value => before.has(value.id))
+        && !same(base.map(value => value.id), next.map(value => value.id))) {
+        const rank = new Map(next.map((value, index) => [value.id, index]));
+        result.sort((left, right) => (rank.get((left as Scene).id) ?? next.length) - (rank.get((right as Scene).id) ?? next.length));
+      }
       return result;
     }
     if (field.endsWith("history")) {
@@ -29,6 +41,19 @@ function merge(base: unknown, next: unknown, current: unknown, field = ""): unkn
     return result;
   }
   return next;
+}
+
+function mergeScene(base: Scene | undefined, next: Scene, current: Scene): unknown {
+  if (base && Number.isFinite(base.start_sec) && Number.isFinite(current.start_sec) && base.start_sec !== current.start_sec
+    && base.start_sec === next.start_sec && base.end_sec === next.end_sec && base.number === next.number) {
+    // A callback made before a move still speaks in the old absolute caption
+    // times. Compare both its base and result in the scene's current origin.
+    const shift = Math.round(current.start_sec! * 1000) - Math.round(base.start_sec! * 1000);
+    const rebase = (scene: Scene) => ({ ...scene, captions: scene.captions?.map(block => ({ ...block,
+      start_sec: (Math.round(block.start_sec * 1000) + shift) / 1000, end_sec: (Math.round(block.end_sec * 1000) + shift) / 1000 })) });
+    return merge(rebase(base), rebase(next), current);
+  }
+  return merge(base, next, current);
 }
 
 export function mergeProjectChanges(base: ProjectData | null, next: ProjectData, current: ProjectData): ProjectData {

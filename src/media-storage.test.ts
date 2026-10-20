@@ -7,6 +7,9 @@ import { editorProject } from "../tests/fixtures/editor-project";
 import { prepareEditorWrite } from "./editor-format";
 import { buildProjectZip, createProjectOnDisk, deleteCandidateAsset, deleteProject, getMediaAsset, getSceneNarration, getSceneVideo, listProjects, saveProject } from "./platform";
 import { candidateAssetId, narrationAssetId } from "./media-composition";
+import { moveScene } from "./scene-order";
+import { EditorHistory } from "./editor-history";
+import { getRenderedVideo, saveRenderedVideo } from "./platform";
 
 const native = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: native.invoke }));
@@ -60,4 +63,28 @@ it("passes the original native path rather than the changed display number to bo
     ["read_project_media", { projectPath: project.project_path, assetPath: scene.candidates[0].path }],
     ["read_project_media", { projectPath: project.project_path, assetPath: scene.narration_audio.path }],
   ]);
+});
+
+it("persists a move and its undo, invalidates the old render and exports the selected file under its new number", async () => {
+  const draft = editorProject(); draft.project_path = await createProjectOnDisk(draft);
+  const scene = draft.scenes[0];
+  scene.candidates = [{ id: "image", path: `${draft.project_path}/03_images/scene01/candidate_image.png`, preview_url: "data:image/png;base64,iVBORw0KGgo=", mode: "uploaded", created_at: "now" }];
+  scene.selected_candidate_id = "image";
+  await saveProject(draft); const [original] = await listProjects();
+  await saveRenderedVideo(original, new Blob(["old-MP4"], { type: "video/mp4" }));
+  const moved = { ...moveScene(original, scene.id, 1), updated_at: new Date(Date.parse(original.updated_at) + 1000).toISOString() };
+  const history = new EditorHistory(); history.record(original, moved, "장면 순서 변경"); await saveProject(moved);
+  const [reopened] = await listProjects();
+  expect(reopened.scenes.map(scene => scene.id)).toEqual(["scene_02", "scene_01", "scene_03"]);
+  expect(await getRenderedVideo(reopened)).toBeNull();
+  expect(await (await getMediaAsset(reopened, "candidate:image"))?.arrayBuffer()).toEqual(await (await getMediaAsset(original, "candidate:image"))?.arrayBuffer());
+  const zip = await JSZip.loadAsync(await (await buildProjectZip(reopened)).arrayBuffer());
+  expect(zip.file(`${reopened.folder_name}/03_images/scene02/selected.png`)).not.toBeNull();
+  expect(zip.file(`${reopened.folder_name}/03_images/scene01/candidate_image.png`)).not.toBeNull();
+  const metadata = JSON.parse(await zip.file(`${reopened.folder_name}/project_data.json`)!.async("string"));
+  expect(metadata.scenes.map((scene: { id: string }) => scene.id)).toEqual(reopened.scenes.map(scene => scene.id));
+  const undo = history.undo(reopened); if (undo.status !== "applied") throw new Error(undo.status);
+  await saveProject(undo.project); const [restored] = await listProjects();
+  expect(restored.scenes.map(scene => scene.id)).toEqual(original.scenes.map(scene => scene.id));
+  expect(restored.source).toEqual(original.source); expect(restored.media).toEqual(original.media);
 });

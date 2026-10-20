@@ -6,7 +6,8 @@ type Patch = { target: Target; field: string; before: unknown; after: unknown };
 type Entry = { group: number; label: string; patches: Patch[] };
 export type HistoryResult = { status: "empty" | "conflict" } | { status: "applied"; project: ProjectData };
 
-const sceneFields = ["subtitle", "title", "caption", "captions", "prompt", "duration", "start_sec", "end_sec", "motion", "music_volume", "video_intro_candidate_id", "video_intro_duration_sec", "video_trim_start_sec", "video_trim_end_sec", "support_start_sec", "selected_candidate_id", "support_selected_candidate_id", "support_image_prompt"];
+const sceneFields = ["number", "subtitle", "title", "caption", "captions", "prompt", "duration", "start_sec", "end_sec", "motion", "music_volume", "video_intro_candidate_id", "video_intro_duration_sec", "video_trim_start_sec", "video_trim_end_sec", "support_start_sec", "selected_candidate_id", "support_selected_candidate_id", "support_image_prompt"];
+const sceneOrder = (project: ProjectData) => project.scenes.map(scene => scene.id);
 const labels: Record<string, string> = {
   subtitle: "강조 자막", title: "장면 제목", caption: "영상 자막", captions: "자막 문구·시간", prompt: "이미지 프롬프트",
   duration: "장면 길이", motion: "이미지 효과", music_volume: "음악 볼륨", selected_candidate_id: "후보 선택",
@@ -15,13 +16,16 @@ const labels: Record<string, string> = {
   support_image_prompt: "보조 이미지 프롬프트", style_guide: "공통 스타일", character_profile: "인물 외형", ending_message: "엔딩 문구",
 };
 const same = (a: unknown, b: unknown) => Object.is(a, b) || JSON.stringify(a) === JSON.stringify(b);
+const sameScenes = (left: ProjectData, right: ProjectData) => left.scenes.length === right.scenes.length && same([...sceneOrder(left)].sort(), [...sceneOrder(right)].sort());
 const object = (project: ProjectData, target: Target): Record<string, unknown> | undefined => {
   const value = target.kind === "project" ? project : target.kind === "scene" ? project.scenes.find(scene => scene.id === target.id) : project[target.kind];
   return value as unknown as Record<string, unknown> | undefined;
 };
+const valueAt = (project: ProjectData, patch: Pick<Patch, "target" | "field">) => patch.target.kind === "project" && patch.field === "scene_order" ? sceneOrder(project) : object(project, patch.target)?.[patch.field];
 
 function patchesBetween(before: ProjectData, after: ProjectData): Patch[] {
   const patches: Patch[] = [];
+  if (!same(sceneOrder(before), sceneOrder(after))) patches.push({ target: { kind: "project" }, field: "scene_order", before: sceneOrder(before), after: sceneOrder(after) });
   const collect = (target: Target, fields: string[]) => {
     const left = object(before, target); const right = object(after, target);
     if (!left || !right) return;
@@ -35,6 +39,8 @@ function patchesBetween(before: ProjectData, after: ProjectData): Patch[] {
 }
 
 function referencesExist(project: ProjectData, patch: Patch): boolean {
+  if (patch.target.kind === "project" && patch.field === "scene_order") return [patch.before, patch.after].every(value => Array.isArray(value)
+    && value.length === project.scenes.length && value.every(id => project.scenes.some(scene => scene.id === id)));
   const target = object(project, patch.target);
   if (!target) return false;
   if (!["selected_candidate_id", "support_selected_candidate_id", "video_intro_candidate_id"].includes(patch.field)) return true;
@@ -45,6 +51,11 @@ function referencesExist(project: ProjectData, patch: Patch): boolean {
 function apply(project: ProjectData, patches: Patch[], direction: "before" | "after"): ProjectData {
   const next = { ...project, anchor: { ...project.anchor }, thumbnail: { ...project.thumbnail }, scenes: project.scenes.map(scene => ({ ...scene })) };
   for (const patch of patches) {
+    if (patch.target.kind === "project" && patch.field === "scene_order") {
+      const byId = new Map(next.scenes.map(scene => [scene.id, scene]));
+      next.scenes = (patch[direction] as string[]).map(id => byId.get(id)!);
+      continue;
+    }
     const target = object(next, patch.target)!;
     const value = structuredClone(patch[direction]);
     if (value === undefined) delete target[patch.field];
@@ -78,7 +89,7 @@ export class EditorHistory {
   record(before: ProjectData, after: ProjectData, label?: string) {
     if (label) this.breakGroup();
     this.reset(after.id);
-    if (!same(before.scenes.map(scene => scene.id), after.scenes.map(scene => scene.id))) { this.reset(after.id, true); return; }
+    if (!sameScenes(before, after)) { this.reset(after.id, true); return; }
     this.reconcile(after);
     const patches = patchesBetween(before, after);
     if (!patches.length) return;
@@ -105,7 +116,7 @@ export class EditorHistory {
     const entry = from.at(-1);
     if (!entry) return { status: "empty" };
     const expected = direction === "before" ? "after" : "before";
-    if (!entry.patches.every(patch => same(object(project, patch.target)?.[patch.field], patch[expected]))) {
+    if (!entry.patches.every(patch => same(valueAt(project, patch), patch[expected]))) {
       this.reset(project.id, true);
       return { status: "conflict" };
     }

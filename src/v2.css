@@ -123,6 +123,10 @@
 .workspace.scene-workspace-root { overflow: visible; }
 .scene-navigation { position: sticky; top: 0; z-index: 4; display: flex; align-items: center; gap: 9px; min-width: 0; margin-bottom: 12px; padding: 8px 10px; border: 1px solid #e2dcd0; border-radius: 12px; background: rgba(250, 248, 242, .97); box-shadow: 0 8px 24px rgba(29, 48, 42, .08); }
 .scene-navigation .scene-tabs { flex: 1; min-width: 0; margin: 0; padding: 2px 0; }
+.scene-order-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.scene-title { gap: 12px; flex-wrap: wrap; align-items: center; }
+.scene-order-controls small { color: var(--muted, #6f7772); font-size: 12px; }
+.scene-order-controls .btn { padding: 8px 10px; font-size: 12px; }
 .scene-nav-button { flex: none; white-space: nowrap; padding: 8px 10px; font-size: 11px; }
 .scene-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(400px, 1.08fr); gap: 22px; align-items: start; }
 .scene-workspace-controls { min-width: 0; }

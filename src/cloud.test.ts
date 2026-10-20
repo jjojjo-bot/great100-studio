@@ -6,6 +6,8 @@ import { setCloudSession } from "./cloud-session";
 import { cloudContext, cloudFileUrls, listCloudProjects, saveCloudProject, saveCloudRenderedVideo, uploadCloudFile } from "./cloud";
 import { editorProject } from "../tests/fixtures/editor-project";
 import { proposeNarrationTiming } from "./timeline";
+import { moveScene } from "./scene-order";
+import { prepareEditorWrite } from "./editor-format";
 
 const userId = "alice";
 const session = { user: { id: userId }, access_token: "alice-token" } as Session;
@@ -33,6 +35,23 @@ it("serializes rapid saves against consecutive server revisions", async () => {
   const draft = project();
   await Promise.all([saveCloudProject(draft), saveCloudProject({ ...draft, person: "수정 1" }), saveCloudProject({ ...draft, person: "수정 2" })]);
   expect(revision).toBe(3); expect(rpc.mock.calls[2][1].p_data.person).toBe("수정 2");
+});
+
+it("saves rapid scene moves through the existing media RPC with consecutive revisions and unchanged originals", async () => {
+  const draft = { ...editorProject(), cloud_owner_id: userId, cloud_version: 0 };
+  draft.scenes[0].candidates = [{ id: "image", path: "projects/original/03_images/scene01/image.png", preview_url: "https://signed", storage_key: "private-image", mode: "uploaded", created_at: "now" }];
+  draft.scenes[0].selected_candidate_id = "image";
+  const original = prepareEditorWrite(draft), first = prepareEditorWrite(moveScene(original, original.scenes[0].id, 1));
+  const second = prepareEditorWrite(moveScene(first, original.scenes[0].id, 1));
+  let revision = 0;
+  rpc.mockImplementation(async (_name, input) => { expect(input.p_expected_version).toBe(revision); return { data: [{ version: ++revision }], error: null }; });
+  await Promise.all([saveCloudProject(original), saveCloudProject(first), saveCloudProject(second)]);
+  expect(rpc.mock.calls.map(call => call[0])).toEqual(Array(3).fill("great100_save_media_project"));
+  const stored = rpc.mock.calls.at(-1)![1].p_data;
+  expect(stored.scenes.map((scene: { id: string }) => scene.id)).toEqual(["scene_02", "scene_03", "scene_01"]);
+  expect(stored.scenes.map((scene: { start_sec: number }) => scene.start_sec)).toEqual([0, 10, 20]);
+  expect(stored.media.assets[0]).toMatchObject({ id: "candidate:image", path: original.media!.assets[0].path, storage_key: "private-image" });
+  expect(stored.source).toEqual(original.source);
 });
 
 it("round-trips editor metadata and unknown fields through the version-aware JSONB RPC", async () => {
